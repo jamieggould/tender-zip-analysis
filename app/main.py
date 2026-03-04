@@ -835,6 +835,7 @@ async def analyse(zip_file: list[UploadFile] = File(...)):
                     for p in extracted:
                         scanned_paths.append((p, str(p.relative_to(extract_dir))))
                 else:
+                    
                     # Preserve folder structure if the browser provides it (folder upload)
 # UploadFile.filename will be the relative path when using webkitdirectory
 rel = (uf.filename or "").replace("\\", "/").lstrip("/")
