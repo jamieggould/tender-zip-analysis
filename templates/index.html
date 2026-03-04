@@ -10,41 +10,52 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
 <style>
-
 :root{
 --bg0:#f6f7fb;
 --bg1:#ffffff;
---border:rgba(15,23,42,0.1);
---text:#0f172a;
---muted:#64748b;
+--card:rgba(255,255,255,0.92);
+--card2:rgba(255,255,255,0.98);
+--border:rgba(15,23,42,0.12);
+--text:rgba(15,23,42,0.92);
+--muted:rgba(15,23,42,0.58);
+
+--shadow:0 20px 50px rgba(2,6,23,0.08);
+--shadow2:0 10px 24px rgba(2,6,23,0.08);
 
 --primaryA:#4f46e5;
 --primaryB:#7c3aed;
 
---shadow:0 20px 50px rgba(2,6,23,0.08);
+--success:#16a34a;
+--warn:#f59e0b;
+
 --radius:18px;
+--radius2:14px;
 }
 
 *{box-sizing:border-box}
+html,body{height:100%}
+
 body{
 margin:0;
 font-family:Inter,system-ui;
-background:
-radial-gradient(1200px 800px at 18% 20%, rgba(124,58,237,0.08) 0%, transparent 60%),
-linear-gradient(180deg,var(--bg0),var(--bg1));
 color:var(--text);
+background:
+radial-gradient(1200px 800px at 18% 20%, rgba(124,58,237,0.10) 0%, transparent 60%),
+radial-gradient(1200px 800px at 80% 18%, rgba(34,197,94,0.08) 0%, transparent 58%),
+linear-gradient(180deg,var(--bg0),var(--bg1));
 }
 
 .wrap{
-max-width:1100px;
-margin:auto;
-padding:30px 20px 60px;
+max-width:1120px;
+margin:0 auto;
+padding:34px 18px 60px;
 }
 
 .top{
 display:flex;
+align-items:center;
 justify-content:center;
-margin-bottom:28px;
+padding:18px 0 26px;
 }
 
 .brand{
@@ -56,15 +67,18 @@ gap:14px;
 .logoWrap{
 width:46px;
 height:46px;
-border-radius:12px;
+border-radius:14px;
 background:white;
 border:1px solid var(--border);
 display:grid;
 place-items:center;
+box-shadow:var(--shadow2);
 }
 
 .logoImg{
 width:34px;
+height:34px;
+object-fit:contain;
 }
 
 .brand h1{
@@ -80,27 +94,23 @@ color:var(--muted);
 }
 
 .shell{
-background:white;
-border-radius:20px;
+background:var(--card);
+border:1px solid var(--border);
+border-radius:22px;
 box-shadow:var(--shadow);
 padding:22px;
-border:1px solid var(--border);
 }
 
 .grid{
 display:grid;
-grid-template-columns:1fr 1.4fr;
+grid-template-columns:1.05fr 1.35fr;
 gap:18px;
 }
 
-@media(max-width:950px){
-.grid{grid-template-columns:1fr}
-}
-
 .panel{
-background:white;
-border-radius:var(--radius);
+background:var(--card2);
 border:1px solid var(--border);
+border-radius:var(--radius);
 padding:18px;
 }
 
@@ -111,9 +121,9 @@ font-weight:800;
 }
 
 .hint{
-font-size:13px;
+margin:0 0 14px;
 color:var(--muted);
-margin-bottom:14px;
+font-size:13px;
 }
 
 .row{
@@ -125,74 +135,91 @@ flex-wrap:wrap;
 
 .btn{
 border:0;
-border-radius:12px;
-padding:10px 16px;
-font-weight:700;
+border-radius:14px;
+padding:11px 14px;
 cursor:pointer;
+font-weight:800;
 background:linear-gradient(135deg,var(--primaryA),var(--primaryB));
 color:white;
 }
 
 .btn.secondary{
 background:white;
-border:1px solid var(--border);
-color:var(--text);
+color:rgba(15,23,42,0.88);
+border:1px solid rgba(15,23,42,0.12);
 }
 
 .upload{
-border-radius:14px;
-border:1px solid var(--border);
+border-radius:var(--radius2);
+border:1px solid rgba(15,23,42,0.10);
+background:white;
 padding:14px;
 }
 
 .hiddenInput{
-display:none;
+position:absolute;
+width:1px;
+height:1px;
+overflow:hidden;
 }
 
 .dropzone{
-border:2px dashed rgba(79,70,229,0.35);
-border-radius:14px;
-padding:20px;
+border:1px dashed rgba(15,23,42,0.22);
+border-radius:16px;
+background:white;
+padding:16px;
 cursor:pointer;
-text-align:center;
-background:#fafafa;
-transition:.15s;
+display:flex;
+align-items:center;
+justify-content:space-between;
 }
 
 .dropzone:hover{
-background:#f3f4ff;
-}
-
-.dropzone.dragover{
-background:#eef2ff;
+border-color:rgba(79,70,229,0.4);
 }
 
 .resultHead{
 display:flex;
-justify-content:space-between;
 align-items:center;
-margin-bottom:12px;
+justify-content:space-between;
+margin-bottom:10px;
 }
 
-.report{
-border-radius:12px;
-border:1px solid var(--border);
-background:white;
-padding:18px;
-font-size:14px;
-line-height:1.6;
-max-height:520px;
+/* ===== ONLY CHANGE MADE HERE ===== */
+
+.pre{
+margin:0;
+border-radius:16px;
+border:1px solid rgba(15,23,42,0.12);
+background:#ffffff;            /* changed from dark */
+color:#0f172a;                 /* black text */
+padding:20px;
+min-height:320px;
+max-height:560px;
 overflow:auto;
-white-space:pre-line;
+font-size:14px;                /* easier to read */
+line-height:1.7;
+font-family:Inter,system-ui;   /* removed monospace */
+white-space:pre-wrap;          /* keeps formatting */
 }
+
+/* ================================= */
 
 .footer{
-margin-top:12px;
-font-size:12px;
-color:var(--muted);
+margin-top:14px;
 display:flex;
 justify-content:space-between;
-flex-wrap:wrap;
+font-size:12px;
+color:var(--muted);
+}
+
+.kbd{
+font-family:ui-monospace;
+font-size:11px;
+padding:2px 6px;
+border-radius:8px;
+border:1px solid rgba(15,23,42,0.12);
+background:white;
 }
 
 </style>
@@ -204,31 +231,34 @@ flex-wrap:wrap;
 
 <header class="top">
 <div class="brand">
+
 <div class="logoWrap">
 <img class="logoImg" src="/static/logo-new.png">
 </div>
+
 <div>
 <h1>Lawmens Tender Pack Summary</h1>
-<p>Upload a tender pack → get an instant breakdown</p>
+<p>Upload a tender pack → get an instant pack breakdown</p>
 </div>
+
 </div>
 </header>
+
 
 <div class="shell">
 
 <div class="grid">
 
-<!-- LEFT PANEL -->
+<!-- LEFT -->
 <section class="panel">
 
 <div class="row" style="justify-content:space-between;">
 <h2>Upload</h2>
-<span>Step 1</span>
+<span class="pill">Step 1</span>
 </div>
 
 <p class="hint">
-Upload tender files (ZIP, PDFs, Excel, Word).  
-We'll scan the pack and generate a quick briefing.
+Upload tender files (ZIP, PDFs, Excel, Word, images) and we'll scan what's inside.
 </p>
 
 <div class="upload">
@@ -236,16 +266,16 @@ We'll scan the pack and generate a quick briefing.
 <input id="zip" class="hiddenInput" type="file" multiple>
 
 <div id="dropzone" class="dropzone">
-Click to upload (or drag files here)
-<div style="font-size:12px;color:#6b7280;margin-top:6px" id="fileName">
-No files selected
-</div>
+Click to upload (or drag and drop)
+<span id="fileName">No file selected</span>
 </div>
 
 <div class="row" style="margin-top:12px;justify-content:space-between;">
 <button id="btn" class="btn" onclick="uploadZip()">Analyse</button>
 
-<div id="status">Idle</div>
+<div class="status">
+<span id="status">Idle</span>
+</div>
 
 </div>
 
@@ -254,23 +284,29 @@ No files selected
 </section>
 
 
-<!-- RIGHT PANEL -->
+<!-- RIGHT -->
 <section class="panel">
 
 <div class="resultHead">
-<h2>Tender Pack Report</h2>
+
+<div class="row" style="gap:10px;">
+<h2 style="margin:0;">Tender Pack Report</h2>
+<span class="pill">Step 2</span>
+</div>
+
 <button class="btn secondary" onclick="downloadJson()" id="downloadBtn" disabled>
 Download JSON
 </button>
+
 </div>
 
-<div id="out" class="report">
-Upload documents to generate a tender briefing.
-</div>
+<pre id="out" class="pre">
+Upload files to generate a tender pack briefing.
+</pre>
 
 <div class="footer">
-<span>Status updates appear above</span>
-<span>/api/analyse</span>
+<span>Status updates appear top-left</span>
+<span>Endpoint: <span class="kbd">/api/analyse</span></span>
 </div>
 
 </section>
@@ -280,7 +316,6 @@ Upload documents to generate a tender briefing.
 </div>
 
 </div>
-
 
 <script src="/static/app.js"></script>
 
@@ -289,37 +324,30 @@ Upload documents to generate a tender briefing.
 
 const input=document.getElementById("zip")
 const dz=document.getElementById("dropzone")
-const name=document.getElementById("fileName")
+const nameEl=document.getElementById("fileName")
 
 dz.onclick=()=>input.click()
 
-input.onchange=()=>{
+input.addEventListener("change",()=>{
 if(!input.files.length){
-name.textContent="No files selected"
+nameEl.textContent="No file selected"
 return
 }
-name.textContent=input.files.length+" files selected"
-}
-
-dz.addEventListener("dragover",(e)=>{
-e.preventDefault()
-dz.classList.add("dragover")
+nameEl.textContent=input.files.length+" files selected"
 })
 
-dz.addEventListener("dragleave",()=>dz.classList.remove("dragover"))
-
-dz.addEventListener("drop",(e)=>{
+dz.addEventListener("dragover",e=>{
 e.preventDefault()
-dz.classList.remove("dragover")
+})
 
+dz.addEventListener("drop",e=>{
+e.preventDefault()
 const dt=new DataTransfer()
-
 for(const f of e.dataTransfer.files){
 dt.items.add(f)
 }
-
 input.files=dt.files
-name.textContent=input.files.length+" files selected"
+nameEl.textContent=input.files.length+" files selected"
 })
 
 })()
