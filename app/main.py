@@ -22,11 +22,6 @@ templates = Jinja2Templates(directory="templates")
 
 # -------- ZIP safety --------
 def safe_extract_zip(zip_path: Path, extract_to: Path, max_files: int = 5000) -> list[Path]:
-    """
-    Safely extract ZIP contents:
-    - blocks path traversal ("zip slip")
-    - limits file count
-    """
     extracted: list[Path] = []
     base = extract_to.resolve()
 
@@ -81,11 +76,6 @@ def classify_file(p: Path) -> str:
 
 
 def guess_revision(filename: str) -> str | None:
-    """
-    Guess revision from filename, e.g.:
-    - REV_P03 / _P03 / -P03
-    - REV C01
-    """
     s = filename.upper()
     m = re.search(r"(?:REV[\s_\-]*)?([PC]\d{2,3})\b", s)
     return m.group(1) if m else None
@@ -98,17 +88,15 @@ def home(request: Request):
 
 
 @app.post("/api/analyse")
-async def analyse(files: list[UploadFile] = File(...)):
+async def analyse(zip_file: list[UploadFile] = File(...)):
     """
-    Accepts:
-      - one ZIP (extract and scan contents)
-      - OR one/many direct files (scan as-is)
-    NOTE: We only scan filenames/extensions for non-ZIP uploads in v1.
+    IMPORTANT: keep the form field name as `zip_file` so the existing frontend
+    (/static/app.js) keeps working without changes.
+    Now supports uploading multiple files and/or ZIPs.
     """
-    if not files:
+    if not zip_file:
         return JSONResponse({"error": "No files uploaded."}, status_code=400)
 
-    # Keep your original size limit, but apply it per file (simple + predictable)
     max_bytes = 300 * 1024 * 1024
 
     by_category: dict[str, list[str]] = defaultdict(list)
@@ -127,7 +115,6 @@ async def analyse(files: list[UploadFile] = File(...)):
         by_category[cat].append(rel_name)
         total_scanned += 1
 
-        # crude drawing number guess from filename start, e.g. A101, D-102, SK123
         stem = fpath.stem.upper()
         m = re.match(r"([A-Z]{1,3}[-_]?\d{2,4})", stem)
         if m:
@@ -139,13 +126,13 @@ async def analyse(files: list[UploadFile] = File(...)):
         extract_dir = tmp_path / "unzipped"
         extract_dir.mkdir(parents=True, exist_ok=True)
 
-        uploaded_file_names: list[str] = []
+        uploaded_names: list[str] = []
 
-        for uf in files:
+        for uf in zip_file:
             if not uf.filename:
                 continue
 
-            uploaded_file_names.append(uf.filename)
+            uploaded_names.append(uf.filename)
 
             content = await uf.read()
             if len(content) > max_bytes:
@@ -154,23 +141,26 @@ async def analyse(files: list[UploadFile] = File(...)):
                     status_code=400,
                 )
 
-            # If ZIP → extract and scan contents
+            # ZIP → extract and scan contents
             if uf.filename.lower().endswith(".zip"):
-                zip_path = tmp_path / f"upload_{len(uploaded_file_names)}.zip"
+                zip_path = tmp_path / f"upload_{len(uploaded_names)}.zip"
                 zip_path.write_bytes(content)
 
                 try:
                     extracted = safe_extract_zip(zip_path, extract_dir, max_files=5000)
                 except Exception as e:
-                    return JSONResponse({"error": f"Could not extract ZIP {uf.filename}: {str(e)}"}, status_code=400)
+                    return JSONResponse(
+                        {"error": f"Could not extract ZIP {uf.filename}: {str(e)}"},
+                        status_code=400
+                    )
 
                 for p in extracted:
                     rel = str(p.relative_to(extract_dir))
                     scan_path(p, rel)
 
             else:
-                # Non-ZIP: save file and scan it directly
-                safe_name = Path(uf.filename).name  # strips any fake paths
+                # Non-ZIP: save file and scan it directly (v1 only looks at name/ext)
+                safe_name = Path(uf.filename).name
                 out_path = tmp_path / safe_name
                 out_path.write_bytes(content)
                 scan_path(out_path, safe_name)
@@ -178,14 +168,14 @@ async def analyse(files: list[UploadFile] = File(...)):
         report = {
             "summary": {
                 "total_files": total_scanned,
-                "uploaded_items": len(uploaded_file_names),
-                "uploaded_names": uploaded_file_names[:200],
+                "uploaded_items": len(uploaded_names),
+                "uploaded_names": uploaded_names[:200],
                 "by_extension": dict(ext_counter.most_common()),
                 "by_category": {k: len(v) for k, v in by_category.items()},
                 "boq_found": len(by_category.get("boq", [])) > 0,
                 "register_found": len(by_category.get("registers", [])) > 0,
                 "addenda_found": len(by_category.get("addenda", [])) > 0,
-                "zips_found": sum(1 for n in uploaded_file_names if n.lower().endswith(".zip")),
+                "zips_found": sum(1 for n in uploaded_names if n.lower().endswith(".zip")),
             },
             "top_hits": {
                 "boq_files": by_category.get("boq", [])[:50],
