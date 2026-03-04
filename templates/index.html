@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Tender ZIP Analyser</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main class="wrap">
+    <h1>Tender ZIP Analyser</h1>
+    <p class="sub">Upload a tender ZIP and get a quick breakdown (files, types, likely BOQ/register/addenda, basic drawing revision guesses).</p>
+
+    <section class="card">
+      <label class="label">Tender ZIP</label>
+      <input id="zip" type="file" accept=".zip" />
+      <div class="row">
+        <button id="btn" onclick="uploadZip()">Analyse</button>
+        <span id="status" class="status">Idle</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="row between">
+        <h2>Result</h2>
+        <button class="secondary" onclick="downloadJson()" id="downloadBtn" disabled>Download JSON</button>
+      </div>
+      <pre id="out">No result yet.</pre>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
