@@ -364,147 +364,152 @@ Upload files to generate a tender pack briefing.
 <script src="/static/app.js"></script>
 
 <script>
-(function(){
+(function () {
+  const input = document.getElementById("zip");
+  const dz = document.getElementById("dropzone");
+  const nameEl = document.getElementById("fileName");
+  const out = document.getElementById("out");
 
-const input=document.getElementById("zip")
-const dz=document.getElementById("dropzone")
-const nameEl=document.getElementById("fileName")
-const out=document.getElementById("out")
+  dz.onclick = () => input.click();
 
-dz.onclick=()=>input.click()
+  input.addEventListener("change", () => {
+    if (!input.files.length) {
+      nameEl.textContent = "No file selected";
+      return;
+    }
+    nameEl.textContent = input.files.length + " files selected";
+  });
 
-input.addEventListener("change",()=>{
-if(!input.files.length){
-nameEl.textContent="No file selected"
-return
-}
-nameEl.textContent=input.files.length+" files selected"
-})
+  dz.addEventListener("dragover", (e) => {
+    e.preventDefault();
+  });
 
-dz.addEventListener("dragover",e=>{
-e.preventDefault()
-})
+  dz.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const dt = new DataTransfer();
+    for (const f of e.dataTransfer.files) {
+      dt.items.add(f);
+    }
+    input.files = dt.files;
+    nameEl.textContent = input.files.length + " files selected";
+  });
 
-dz.addEventListener("drop",e=>{
-e.preventDefault()
-const dt=new DataTransfer()
-for(const f of e.dataTransfer.files){
-dt.items.add(f)
-}
-input.files=dt.files
-nameEl.textContent=input.files.length+" files selected"
-})
+  // Render a nicer HTML report into #out.
+  // IMPORTANT:
+  // 1) Change <pre id="out" ...> to <div id="out" ...> in your HTML.
+  // 2) In CSS for .pre, set white-space: normal; (or use the CSS I sent earlier).
+  window.renderTenderReport = function (data) {
+    try {
+      if (!data) {
+        out.textContent = "No data returned.";
+        return;
+      }
 
-/* -------- FIX: render an actual summary (use executive_summary/constraints/missing) -------- */
-window.renderTenderReport = function(data){
-try{
-if(!data){
-out.textContent="No data returned."
-return
-}
+      const s = data.summary || {};
+      const b = data.briefing || {};
+      const kf = b.key_facts || {};
 
-const s = data.summary || {}
-const b = data.briefing || {}
+      // Basic HTML escape (prevents breaking layout / XSS)
+      const esc = (x) =>
+        String(x ?? "").replace(/[&<>"']/g, (m) => ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        }[m]));
 
-function line(txt=""){ return txt + "\n" }
-function badge(ok){ return ok ? "[FOUND]" : "[NOT FOUND]" }
+      const badge = (ok) =>
+        ok
+          ? `<span class="badge ok">FOUND</span>`
+          : `<span class="badge warn">NOT FOUND</span>`;
 
-function listBlock(title, items, max=10){
-if(!items || !items.length) return ""
-let t = ""
-t += line(title)
-items.slice(0,max).forEach(x=>{
-t += line("• " + String(x))
-})
-if(items.length > max){
-t += line("• … (" + (items.length - max) + " more)")
-}
-t += line()
-return t
-}
+      const list = (items, max = 10, emptyText = "None detected.") => {
+        if (!items || !items.length) return `<div class="muted">${esc(emptyText)}</div>`;
+        const shown = items.slice(0, max);
+        const more =
+          items.length > max
+            ? `<li class="muted">… (${items.length - max} more)</li>`
+            : "";
+        return `<ul>${shown.map((x) => `<li>${esc(x)}</li>`).join("")}${more}</ul>`;
+      };
 
-let text = ""
-text += line("TENDER PACK BRIEFING")
-text += line("--------------------------------------------------")
+      const dates = b.dates_found || b.date_candidates || [];
 
-/* Executive summary (human) */
-if(b.executive_summary){
-text += line(b.executive_summary.trim())
-text += line()
-} else {
-text += line("EXECUTIVE SUMMARY")
-text += line("• No executive summary returned yet (backend needs to provide briefing.executive_summary).")
-text += line()
-}
+      // If briefing is missing entirely, show a helpful message
+      if (!Object.keys(b).length) {
+        out.innerHTML =
+          `<h3>Tender pack report</h3>` +
+          `<div class="divider"></div>` +
+          `<div>This JSON doesn't contain a <b>briefing</b> section yet.</div>` +
+          `<div class="muted" style="margin-top:10px;">Make sure your backend returns <b>report.briefing</b> and refresh/re-upload.</div>`;
+        return;
+      }
 
-/* Pack contents */
-text += line("PACK CONTENT CHECK")
-text += line("• BOQ / Pricing: " + badge(!!s.boq_found))
-text += line("• Registers: " + badge(!!s.register_found))
-text += line("• Drawings: " + badge(!!s.drawings_found))
-text += line("• Forms: " + badge(!!s.forms_found))
-text += line("• Prelims: " + badge(!!s.prelims_found))
-text += line("• Specs: " + badge(!!s.specs_found))
-text += line("• Addenda: " + badge(!!s.addenda_found))
-text += line()
+      out.innerHTML = `
+        <h3>Tender pack briefing</h3>
+        <div class="divider"></div>
 
-/* Dates */
-const dates = b.dates_found || b.date_candidates || []
-if(dates && dates.length){
-text += line("DATES FOUND")
-text += line("• " + dates.slice(0,12).join(" · "))
-if(dates.length > 12){
-text += line("• … (" + (dates.length - 12) + " more)")
-}
-text += line()
-}
+        <h3>Executive summary</h3>
+        <div>${esc(b.executive_summary || "No executive summary returned.")}</div>
 
-/* Key facts (structured) */
-if(b.key_facts && Object.keys(b.key_facts).length){
-text += line("KEY FACTS (DETECTED)")
-const kf = b.key_facts
-if(kf.deadline_or_key_date) text += line("• Deadline / key date: " + kf.deadline_or_key_date)
-if(kf.submission_route) text += line("• Submission route: " + kf.submission_route)
-if(kf.programme_duration) text += line("• Programme / duration: " + kf.programme_duration)
-if(kf.working_hours) text += line("• Working hours: " + kf.working_hours)
-if(kf.retention) text += line("• Retention: " + kf.retention)
-if(kf.liquidated_damages) text += line("• LD / LADs: " + kf.liquidated_damages)
-if(kf.insurance_levels) text += line("• Insurance: " + kf.insurance_levels)
-if(kf.accreditations && kf.accreditations.length){
-text += line("• Accreditations: " + kf.accreditations.slice(0,6).join(", "))
-}
-text += line()
-}
+        <div class="divider"></div>
 
-/* Constraints (clean bullets) */
-if(b.constraints && b.constraints.length){
-text += listBlock("KEY CONSTRAINTS (TOP)", b.constraints, 10)
-}
+        <h3>Pack content check</h3>
+        <ul>
+          <li>BOQ / Pricing: ${badge(!!s.boq_found)}</li>
+          <li>Registers: ${badge(!!s.register_found)}</li>
+          <li>Drawings: ${badge(!!s.drawings_found)}</li>
+          <li>Forms: ${badge(!!s.forms_found)}</li>
+          <li>Prelims: ${badge(!!s.prelims_found)}</li>
+          <li>Specs: ${badge(!!s.specs_found)}</li>
+          <li>Addenda: ${badge(!!s.addenda_found)}</li>
+        </ul>
 
-/* Requirements (keep short + useful) */
-text += listBlock("MANDATORY REQUIREMENTS (STRICT)", b.requirements_strict || [], 14)
-text += listBlock("OTHER SUBMISSION REQUESTS (LOOSE)", b.requirements_loose || [], 14)
+        ${dates && dates.length ? `
+          <div class="divider"></div>
+          <h3>Dates found</h3>
+          <div>${esc(dates.slice(0, 12).join(" · "))}${dates.length > 12 ? ` <span class="muted">(+${dates.length - 12} more)</span>` : ""}</div>
+        ` : ""}
 
-/* Missing (what you need to chase) */
-if(b.missing && b.missing.length){
-text += listBlock("NOT FOUND (CHASE THESE)", b.missing, 14)
-}
+        <div class="divider"></div>
 
-/* Fallback if briefing missing */
-if(!Object.keys(b).length){
-text = "This JSON doesn't contain a 'briefing' section yet.\n\n" +
-"Make sure your backend returns:\n- report.briefing\n- report.sections\n\n" +
-"Then refresh and re-upload."
-}
+        <h3>Key facts</h3>
+        <ul>
+          ${kf.deadline_or_key_date ? `<li><b>Deadline / key date:</b> ${esc(kf.deadline_or_key_date)}</li>` : ""}
+          ${kf.submission_route ? `<li><b>Submission route:</b> ${esc(kf.submission_route)}</li>` : ""}
+          ${kf.programme_duration ? `<li><b>Programme / duration:</b> ${esc(kf.programme_duration)}</li>` : ""}
+          ${kf.working_hours ? `<li><b>Working hours:</b> ${esc(kf.working_hours)}</li>` : ""}
+          ${kf.retention ? `<li><b>Retention:</b> ${esc(kf.retention)}</li>` : ""}
+          ${kf.liquidated_damages ? `<li><b>LD / LADs:</b> ${esc(kf.liquidated_damages)}</li>` : ""}
+          ${kf.insurance_levels ? `<li><b>Insurance:</b> ${esc(kf.insurance_levels)}</li>` : ""}
+          ${(kf.accreditations && kf.accreditations.length) ? `<li><b>Accreditations:</b> ${esc(kf.accreditations.slice(0, 6).join(", "))}</li>` : ""}
+          ${(!Object.keys(kf).length) ? `<li class="muted">No key facts detected.</li>` : ""}
+        </ul>
 
-out.textContent = text.trim() + "\n"
-}catch(err){
-out.textContent = "Render failed: " + err
-}
-}
-/* -------------------------------------------------------------------------- */
+        <div class="divider"></div>
 
-})()
+        <h3>Key constraints</h3>
+        ${list(b.constraints || [], 10)}
+
+        <div class="divider"></div>
+
+        <h3>Mandatory requirements</h3>
+        ${list(b.requirements_strict || [], 12)}
+
+        <h3>Other submission requests</h3>
+        ${list(b.requirements_loose || [], 12)}
+
+        <div class="divider"></div>
+
+        <h3>Not found (chase these)</h3>
+        ${list(b.missing || [], 12, "Nothing missing detected.")}
+      `;
+    } catch (err) {
+      out.textContent = "Render failed: " + err;
+    }
+  };
+})();
 </script>
 
 </body>
