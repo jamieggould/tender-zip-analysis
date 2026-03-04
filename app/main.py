@@ -219,25 +219,12 @@ def _clean_text(s: str) -> str:
     return s.strip()
 
 
-def _snip_context(text: str, idx: int, window: int = 140) -> str:
+def _snip_context(text: str, idx: int, window: int = 160) -> str:
     start = max(0, idx - window)
     end = min(len(text), idx + window)
     snippet = text[start:end]
     snippet = re.sub(r"\s+", " ", snippet).strip()
-    return snippet[:300]
-
-
-def _find_evidence(text: str, patterns: list[str], max_items: int = 6) -> list[dict[str, str]]:
-    found: list[dict[str, str]] = []
-    if not text:
-        return found
-    for pat in patterns:
-        for m in re.finditer(pat, text, flags=re.IGNORECASE):
-            raw = m.group(0).strip()
-            found.append({"match": raw[:240], "evidence": _snip_context(text, m.start())})
-            if len(found) >= max_items:
-                return found
-    return found
+    return snippet[:360]
 
 
 def _normalize_line(s: str) -> str:
@@ -253,20 +240,56 @@ def _is_tabley(s: str) -> bool:
     return (s or "").count("|") >= 3
 
 
-def _is_gibberish_line(s: str) -> bool:
+# ---- NEW: much stronger “junk/table/schedule row” rejection (minimal but high impact) ----
+_SCHEDULE_GLUE_RE = re.compile(r"[A-Z]{2,}\d+[A-Z]{2,}|\d+[A-Z]{2,}", re.I)
+
+
+def _looks_like_schedule_row(s: str) -> bool:
     s2 = _normalize_line(s)
-    if len(s2) < 10:
+    if not s2:
         return True
+
+    # Lots of '|' (docx table extracts)
     if _is_tabley(s2):
         return True
+
+    # Very long tokens are usually cell concatenation (e.g. DOORNUMBERLOCATION...)
+    toks = [t for t in re.split(r"\s+", s2) if t]
+    longest = max((len(t) for t in toks), default=0)
+    if longest >= 26:
+        return True
+
+    # Too many all-caps words = schedules/spec tables
+    words = re.findall(r"[A-Za-z]+", s2)
+    if len(words) >= 10:
+        caps = sum(1 for w in words if w.isupper() and len(w) >= 3)
+        if caps / max(1, len(words)) > 0.55:
+            return True
+
+    # Glued alpha-numeric patterns, long lines
+    if len(s2) > 90 and _SCHEDULE_GLUE_RE.search(s2):
+        return True
+
+    return False
+
+
+def _is_gibberish_line(s: str) -> bool:
+    s2 = _normalize_line(s)
+    if len(s2) < 12:
+        return True
+    if _looks_like_schedule_row(s2):
+        return True
+
     code_tokens = re.findall(r"\b[A-Z]{1,4}[-_ ]?\d{1,4}[A-Z]?\b", s2)
     if len(code_tokens) >= 6:
         return True
+
     letters = [c for c in s2 if c.isalpha()]
     if letters:
         upper_ratio = sum(1 for c in letters if c.isupper()) / max(1, len(letters))
-        if upper_ratio > 0.75 and len(s2) > 40:
+        if upper_ratio > 0.75 and len(s2) > 60:
             return True
+
     return False
 
 
@@ -276,6 +299,11 @@ def _is_tender_relevant_sentence(s: str) -> bool:
         return False
     if _looks_irrelevant(s2):
         return False
+
+    # Must read like a sentence (prevents random fragments)
+    if s2.count(" ") < 6:
+        return False
+
     tl = s2.lower()
     if COMMERCIAL_SIGNAL_RE.search(s2):
         return True
@@ -290,55 +318,107 @@ def _split_sentences(text: str) -> list[str]:
     return [p.strip() for p in SENT_SPLIT_RE.split(text) if p and p.strip()]
 
 
-def _extract_requirements(text: str, max_lines: int = 40) -> dict[str, list[str]]:
+def _find_evidence(text: str, patterns: list[str], max_items: int = 6) -> list[dict[str, str]]:
+    found: list[dict[str, str]] = []
+    if not text:
+        return found
+    for pat in patterns:
+        for m in re.finditer(pat, text, flags=re.IGNORECASE):
+            raw = m.group(0).strip()
+            found.append({"match": raw[:240], "evidence": _snip_context(text, m.start())})
+            if len(found) >= max_items:
+                return found
+    return found
+
+
+# ---- NEW: run evidence patterns per-document so facts keep context (file name) ----
+def _find_evidence_in_docs(
+    docs: list[tuple[str, str]],
+    patterns: list[str],
+    max_items: int = 10,
+) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for fname, text in docs:
+        if not text:
+            continue
+        hits = _find_evidence(text, patterns, max_items=6)
+        for h in hits:
+            out.append({"file": fname, "match": h.get("match", ""), "evidence": h.get("evidence", "")})
+            if len(out) >= max_items:
+                return out
+    return out
+
+
+def _extract_requirements(text: str, source: str = "", max_lines: int = 40) -> dict[str, list[str]]:
+    """
+    Output is still list[str] (so your frontend doesn’t change),
+    but each line is now prefixed with (SOURCE FILE) so estimators know where it came from.
+    Filters aggressively to avoid schedule/table junk.
+    """
     strict: list[str] = []
     loose: list[str] = []
 
     raw_lines = [l.strip() for l in re.split(r"[\r\n]+", text or "") if l and l.strip()]
 
     def accept_line(l: str) -> bool:
-        l2 = _normalize_line(l)[:320]
+        l2 = _normalize_line(l)[:360]
         if not l2:
             return False
         if _looks_irrelevant(l2):
+            return False
+        if _looks_like_schedule_row(l2):
             return False
         if _is_gibberish_line(l2):
             return False
         return _is_tender_relevant_sentence(l2)
 
+    def fmt(line: str) -> str:
+        line2 = _normalize_line(line)[:260]
+        if source:
+            return f"({source}) {line2}"
+        return line2
+
+    # Prefer lines first (works well for specs/prelims)
     for l in raw_lines:
         ll = l[:420]
         if not accept_line(ll):
             continue
+        # prevent short/broken fragments entering strict/loose
+        if ll.count(" ") < 6:
+            continue
         if REQ_STRICT_RE.search(ll):
-            strict.append(_normalize_line(ll)[:260])
+            strict.append(fmt(ll))
         elif REQ_LOOSE_RE.search(ll):
-            loose.append(_normalize_line(ll)[:260])
+            loose.append(fmt(ll))
         if len(strict) >= max_lines and len(loose) >= max_lines:
             break
 
+    # Fallback: sentences (for PDFs without line structure)
     if len(strict) < 6:
         for s in _split_sentences(text):
             ss = s[:420]
             if not accept_line(ss):
                 continue
+            if ss.count(" ") < 6:
+                continue
             if REQ_STRICT_RE.search(ss):
-                strict.append(_normalize_line(ss)[:260])
+                strict.append(fmt(ss))
             if len(strict) >= max_lines:
                 break
 
     def dedup(items: list[str], limit: int) -> list[str]:
-        out: list[str] = []
+        out2: list[str] = []
         seen: set[str] = set()
         for x in items:
-            k = x.lower().strip()
-            if not k or k in seen:
+            # dedupe ignoring the (source) prefix
+            core = re.sub(r"^\([^)]+\)\s*", "", x).lower().strip()
+            if not core or core in seen:
                 continue
-            seen.add(k)
-            out.append(x.strip())
-            if len(out) >= limit:
+            seen.add(core)
+            out2.append(x.strip())
+            if len(out2) >= limit:
                 break
-        return out
+        return out2
 
     return {"strict": dedup(strict, max_lines), "loose": dedup(loose, max_lines)}
 
@@ -346,14 +426,22 @@ def _extract_requirements(text: str, max_lines: int = 40) -> dict[str, list[str]
 def _best_line_from_evidence(items: list[dict[str, str]] | None) -> str | None:
     if not items:
         return None
+
+    # Prefer evidence that looks like a sentence and include source file
     for it in items:
         m = _normalize_line(it.get("match") or "")
+        src = it.get("file") or ""
         if m and _is_tender_relevant_sentence(m):
-            return m[:240]
+            return f"{m[:220]} (from {src})" if src else m[:220]
+
+    # Fallback: use evidence snippet
     for it in items:
-        m = _normalize_line(it.get("match") or "")
-        if m and not _is_gibberish_line(m):
-            return m[:240]
+        ev = _normalize_line(it.get("evidence") or "")
+        src = it.get("file") or ""
+        if ev and not _is_gibberish_line(ev):
+            ev2 = ev[:240]
+            return f"{ev2} (from {src})" if src else ev2
+
     return None
 
 
@@ -385,30 +473,43 @@ def _sentences_around(text: str, idx: int, max_sentences: int = 2) -> str:
     for j in range(max(0, s_i), min(len(offsets), s_i + max_sentences)):
         sent = offsets[j][2]
         if sent and not _is_gibberish_line(sent):
-            chosen.append(sent[:240])
+            chosen.append(sent[:260])
 
     return " ".join(chosen).strip()
 
 
-def _find_bucket_evidence(merged: str, needle: str, bucket: str, max_items: int = 1) -> list[str]:
-    merged_lc = merged.lower()
-    out: list[str] = []
-    start = 0
-    while len(out) < max_items:
-        idx = merged_lc.find(needle, start)
-        if idx == -1:
-            break
-        s = _sentences_around(merged, idx, max_sentences=2)
-        if s and _is_tender_relevant_sentence(s):
-            sl = s.lower()
+def _find_bucket_evidence_in_docs(
+    docs: list[tuple[str, str]],
+    needles: list[str],
+    bucket: str,
+) -> str | None:
+    """
+    Find ONE best human-readable sentence for the bucket, with source file.
+    """
+    for fname, text in docs:
+        if not text:
+            continue
+        tl = text.lower()
+        for needle in needles:
+            if needle not in tl:
+                continue
+            idx = tl.find(needle)
+            s = _sentences_around(text, idx, max_sentences=2)
+            if not s:
+                continue
+            if _looks_like_schedule_row(s) or _is_gibberish_line(s):
+                continue
+            if not _is_tender_relevant_sentence(s):
+                continue
+
+            # Special tighten for isolations bucket (kept)
             if bucket == "Services / isolations":
+                sl = s.lower()
                 if not any(x in sl for x in ["isolation", "isolations", "live", "disconnect", "disconnection", "divert", "diversion"]):
-                    start = idx + len(needle)
                     continue
-            if s not in out:
-                out.append(s)
-        start = idx + len(needle)
-    return out
+
+            return f"{s[:240]} (from {fname})"
+    return None
 
 
 # HARD caps to prevent Render/timeouts
@@ -455,7 +556,7 @@ def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, An
 
         info["snippet"] = text[:1200]
         info["text"] = text[:22000]  # internal use only
-        info["requirements"] = _extract_requirements(text)
+        info["requirements"] = _extract_requirements(text, source=path.name)
 
     except Exception as e:
         info["error"] = f"PDF read failed: {e}"
@@ -499,7 +600,7 @@ def extract_docx_info(path: Path, max_paras: int = DOCX_MAX_PARAS) -> dict[str, 
 
         info["snippet"] = text[:1200]
         info["text"] = text[:22000]  # internal use only
-        info["requirements"] = _extract_requirements(text)
+        info["requirements"] = _extract_requirements(text, source=path.name)
 
     except Exception as e:
         info["error"] = f"DOCX read failed: {e}"
@@ -596,7 +697,13 @@ def extract_by_type(path: Path, category: str) -> dict[str, Any]:
 
 
 def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
-    text_blobs: list[str] = []
+    """
+    Core improvement:
+    - Stop “random merged blob” driving key facts.
+    - Instead, keep (file, text) pairs and extract facts/constraints/requirements with source context.
+    - This makes output readable and actionable for estimators.
+    """
+    docs: list[tuple[str, str]] = []
     strict_reqs: list[str] = []
     loose_reqs: list[str] = []
 
@@ -607,24 +714,24 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
             if t and isinstance(t, str) and t.strip():
                 if _looks_irrelevant(t[:900]):
                     continue
-                text_blobs.append(t)
+                fname = Path(item.get("file") or "").name or "unknown"
+                docs.append((fname, t))
 
             req = ex.get("requirements") or {}
             strict_reqs.extend(req.get("strict", []) or [])
             loose_reqs.extend(req.get("loose", []) or [])
 
-    merged = "\n\n".join(text_blobs)[:160000]
-    merged_lc = merged.lower()
+    # Facts with context (file + evidence)
+    tender_return = _find_evidence_in_docs(docs, TENDER_RETURN_PATTERNS, max_items=10)
+    submission = _find_evidence_in_docs(docs, SUBMISSION_PATTERNS, max_items=10)
+    ld = _find_evidence_in_docs(docs, LD_PATTERNS, max_items=10)
+    retention = _find_evidence_in_docs(docs, RETENTION_PATTERNS, max_items=10)
+    programme = _find_evidence_in_docs(docs, PROGRAMME_PATTERNS, max_items=10)
+    working_hours = _find_evidence_in_docs(docs, WORKING_HOURS_PATTERNS, max_items=10)
+    insurance = _find_evidence_in_docs(docs, INSURANCE_PATTERNS, max_items=10)
+    accreditations = _find_evidence_in_docs(docs, ACCREDITATION_PATTERNS, max_items=12)
 
-    tender_return = _find_evidence(merged, TENDER_RETURN_PATTERNS, max_items=10)
-    submission = _find_evidence(merged, SUBMISSION_PATTERNS, max_items=10)
-    ld = _find_evidence(merged, LD_PATTERNS, max_items=10)
-    retention = _find_evidence(merged, RETENTION_PATTERNS, max_items=10)
-    programme = _find_evidence(merged, PROGRAMME_PATTERNS, max_items=10)
-    working_hours = _find_evidence(merged, WORKING_HOURS_PATTERNS, max_items=10)
-    insurance = _find_evidence(merged, INSURANCE_PATTERNS, max_items=10)
-    accreditations = _find_evidence(merged, ACCREDITATION_PATTERNS, max_items=12)
-
+    # Dates (still gathered from per-file extracts like before)
     date_candidates: set[str] = set()
     for _, items in sections.items():
         for it in items:
@@ -639,12 +746,14 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
             x2 = _normalize_line(x)
             if not x2:
                 continue
-            if not _is_tender_relevant_sentence(x2):
+            # dedupe ignoring (source)
+            core = re.sub(r"^\([^)]+\)\s*", "", x2).lower().strip()
+            if not core or core in seen:
                 continue
-            k = x2.lower()
-            if k in seen:
+            seen.add(core)
+            # must be readable
+            if _looks_like_schedule_row(x2) or _is_gibberish_line(x2):
                 continue
-            seen.add(k)
             out.append(x2[:260])
             if len(out) >= limit:
                 break
@@ -653,22 +762,12 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
     strict_clean = dedup_clean(strict_reqs, 18)
     loose_clean = dedup_clean(loose_reqs, 18)
 
+    # Constraints per bucket with best sentence + source file
     constraints: list[str] = []
     for bucket, needles in RISK_BUCKETS.items():
-        if not any(n in merged_lc for n in needles):
-            continue
-
-        best_ev = ""
-        for needle in needles:
-            if needle in merged_lc:
-                evs = _find_bucket_evidence(merged, needle, bucket=bucket, max_items=1)
-                if evs:
-                    best_ev = evs[0]
-                    break
-
-        if best_ev:
-            constraints.append(f"{bucket}: {best_ev}")
-
+        ev = _find_bucket_evidence_in_docs(docs, needles, bucket=bucket)
+        if ev:
+            constraints.append(f"{bucket}: {ev}")
         if len(constraints) >= 10:
             break
 
@@ -699,7 +798,7 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
         missing.append("Accreditations (CHAS/SMAS/etc) not found")
 
     lines: list[str] = []
-    lines.append("EXECUTIVE SUMMARY")
+    lines.append("EXECUTIVE SUMMARY (Estimator-ready)")
     if headline_deadline:
         lines.append(f"• Deadline / key date: {headline_deadline}")
     if headline_submission:
@@ -722,9 +821,14 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
 
     acc_short: list[str] = []
     for x in (accreditations or [])[:12]:
+        src = x.get("file") or ""
         m = _normalize_line(x.get("match") or "")
-        if m and _is_tender_relevant_sentence(m):
-            acc_short.append(m[:160])
+        if not m:
+            continue
+        if _looks_like_schedule_row(m) or _is_gibberish_line(m):
+            continue
+        # keep it short + sourced
+        acc_short.append(f"{m[:150]} (from {src})" if src else m[:150])
         if len(acc_short) >= 8:
             break
 
@@ -745,7 +849,7 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
         "requirements_strict": strict_clean,
         "requirements_loose": loose_clean,
         "missing": missing,
-        "sources_scanned": len(text_blobs),
+        "sources_scanned": len(docs),
         "evidence": {
             "tender_return_candidates": tender_return[:6],
             "submission_candidates": submission[:6],
@@ -777,6 +881,22 @@ def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
+# ---- NEW: stream uploads to disk (prevents intermittent Render “Load failed” on big packs) ----
+async def _save_upload_to_path(uf: UploadFile, dest: Path, max_bytes: int) -> int:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    size = 0
+    with open(dest, "wb") as f:
+        while True:
+            chunk = await uf.read(1024 * 1024)  # 1MB
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > max_bytes:
+                raise ValueError("File too large")
+            f.write(chunk)
+    return size
+
+
 @app.post("/api/analyse")
 async def analyse(
     zip_file: Optional[list[UploadFile]] = File(None),
@@ -790,6 +910,7 @@ async def analyse(
 
     Key fix:
       - accept multiple common multipart field names (zip_file / files / file) so the frontend can't mismatch.
+      - stream uploads to disk (stops random “Load failed” / dropped connections on Render).
     """
     try:
         uploads: list[UploadFile] = []
@@ -823,17 +944,17 @@ async def analyse(
 
                 uploaded_names.append(uf.filename)
 
-                content = await uf.read()
-                if len(content) > max_bytes:
-                    return JSONResponse(
-                        {"error": f"File too large (limit 300MB): {uf.filename}"},
-                        status_code=400,
-                    )
-
                 # ZIP upload
                 if uf.filename.lower().endswith(".zip"):
                     zp = tmp_path / f"upload_{len(uploaded_names)}.zip"
-                    zp.write_bytes(content)
+                    try:
+                        await _save_upload_to_path(uf, zp, max_bytes=max_bytes)
+                    except ValueError:
+                        return JSONResponse(
+                            {"error": f"File too large (limit 300MB): {uf.filename}"},
+                            status_code=400,
+                        )
+
                     try:
                         extracted = safe_extract_zip(zp, extract_dir, max_files=5000)
                     except Exception as e:
@@ -847,20 +968,21 @@ async def analyse(
 
                 # Non-zip (including folder upload with subfolders in filename)
                 else:
-                    # uf.filename may contain relative subfolders when using folder upload
                     rel = (uf.filename or "").replace("\\", "/").lstrip("/")
 
-                    # prevent traversal + remove empty/. /.. segments
                     rel_path = Path(rel)
                     safe_rel = Path(*[p for p in rel_path.parts if p not in ("", ".", "..")])
-
-                    # if the browser gives an empty-ish name, fall back
                     if str(safe_rel) in ("", "."):
                         safe_rel = Path(Path(uf.filename).name)
 
                     op = tmp_path / safe_rel
-                    op.parent.mkdir(parents=True, exist_ok=True)
-                    op.write_bytes(content)
+                    try:
+                        await _save_upload_to_path(uf, op, max_bytes=max_bytes)
+                    except ValueError:
+                        return JSONResponse(
+                            {"error": f"File too large (limit 300MB): {uf.filename}"},
+                            status_code=400,
+                        )
 
                     scanned_paths.append((op, str(safe_rel)))
 
