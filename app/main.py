@@ -98,55 +98,94 @@ def home(request: Request):
 
 
 @app.post("/api/analyse")
-async def analyse(zip_file: UploadFile = File(...)):
-    if not zip_file.filename.lower().endswith(".zip"):
-        return JSONResponse({"error": "Please upload a .zip file."}, status_code=400)
+async def analyse(files: list[UploadFile] = File(...)):
+    """
+    Accepts:
+      - one ZIP (extract and scan contents)
+      - OR one/many direct files (scan as-is)
+    NOTE: We only scan filenames/extensions for non-ZIP uploads in v1.
+    """
+    if not files:
+        return JSONResponse({"error": "No files uploaded."}, status_code=400)
 
-    content = await zip_file.read()
-    if len(content) > 300 * 1024 * 1024:
-        return JSONResponse({"error": "ZIP too large for v1 (limit 300MB)."}, status_code=400)
+    # Keep your original size limit, but apply it per file (simple + predictable)
+    max_bytes = 300 * 1024 * 1024
+
+    by_category: dict[str, list[str]] = defaultdict(list)
+    ext_counter: Counter[str] = Counter()
+    drawings_by_number: dict[str, list[dict]] = defaultdict(list)
+
+    total_scanned = 0
+
+    def scan_path(fpath: Path, rel_name: str) -> None:
+        nonlocal total_scanned
+
+        ext = fpath.suffix.lower() if fpath.suffix else "(no_ext)"
+        ext_counter[ext] += 1
+
+        cat = classify_file(fpath)
+        by_category[cat].append(rel_name)
+        total_scanned += 1
+
+        # crude drawing number guess from filename start, e.g. A101, D-102, SK123
+        stem = fpath.stem.upper()
+        m = re.match(r"([A-Z]{1,3}[-_]?\d{2,4})", stem)
+        if m:
+            drg = m.group(1).replace("_", "-")
+            drawings_by_number[drg].append({"file": rel_name, "rev": guess_revision(fpath.name)})
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        zip_path = tmp_path / "upload.zip"
-        zip_path.write_bytes(content)
-
         extract_dir = tmp_path / "unzipped"
         extract_dir.mkdir(parents=True, exist_ok=True)
 
-        try:
-            files = safe_extract_zip(zip_path, extract_dir, max_files=5000)
-        except Exception as e:
-            return JSONResponse({"error": f"Could not extract ZIP: {str(e)}"}, status_code=400)
+        uploaded_file_names: list[str] = []
 
-        by_category: dict[str, list[str]] = defaultdict(list)
-        ext_counter: Counter[str] = Counter()
+        for uf in files:
+            if not uf.filename:
+                continue
 
-        drawings_by_number: dict[str, list[dict]] = defaultdict(list)
+            uploaded_file_names.append(uf.filename)
 
-        for f in files:
-            rel = str(f.relative_to(extract_dir))
-            ext = f.suffix.lower() if f.suffix else "(no_ext)"
-            ext_counter[ext] += 1
+            content = await uf.read()
+            if len(content) > max_bytes:
+                return JSONResponse(
+                    {"error": f"File too large (limit 300MB): {uf.filename}"},
+                    status_code=400,
+                )
 
-            cat = classify_file(f)
-            by_category[cat].append(rel)
+            # If ZIP → extract and scan contents
+            if uf.filename.lower().endswith(".zip"):
+                zip_path = tmp_path / f"upload_{len(uploaded_file_names)}.zip"
+                zip_path.write_bytes(content)
 
-            # crude drawing number guess from filename start, e.g. A101, D-102, SK123
-            stem = f.stem.upper()
-            m = re.match(r"([A-Z]{1,3}[-_]?\d{2,4})", stem)
-            if m:
-                drg = m.group(1).replace("_", "-")
-                drawings_by_number[drg].append({"file": rel, "rev": guess_revision(f.name)})
+                try:
+                    extracted = safe_extract_zip(zip_path, extract_dir, max_files=5000)
+                except Exception as e:
+                    return JSONResponse({"error": f"Could not extract ZIP {uf.filename}: {str(e)}"}, status_code=400)
+
+                for p in extracted:
+                    rel = str(p.relative_to(extract_dir))
+                    scan_path(p, rel)
+
+            else:
+                # Non-ZIP: save file and scan it directly
+                safe_name = Path(uf.filename).name  # strips any fake paths
+                out_path = tmp_path / safe_name
+                out_path.write_bytes(content)
+                scan_path(out_path, safe_name)
 
         report = {
             "summary": {
-                "total_files": len(files),
+                "total_files": total_scanned,
+                "uploaded_items": len(uploaded_file_names),
+                "uploaded_names": uploaded_file_names[:200],
                 "by_extension": dict(ext_counter.most_common()),
                 "by_category": {k: len(v) for k, v in by_category.items()},
                 "boq_found": len(by_category.get("boq", [])) > 0,
                 "register_found": len(by_category.get("registers", [])) > 0,
                 "addenda_found": len(by_category.get("addenda", [])) > 0,
+                "zips_found": sum(1 for n in uploaded_file_names if n.lower().endswith(".zip")),
             },
             "top_hits": {
                 "boq_files": by_category.get("boq", [])[:50],
