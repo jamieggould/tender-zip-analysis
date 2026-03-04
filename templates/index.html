@@ -267,7 +267,7 @@
       color: rgba(15,23,42,0.80);
     }
 
-    /* ===== NEW: Dropzone file picker ===== */
+    /* ===== Dropzone file picker ===== */
     .upload{
       border-radius: var(--radius2);
       border: 1px solid rgba(15,23,42,0.10);
@@ -373,13 +373,12 @@
   <div class="wrap">
     <header class="top">
       <div class="brand">
-        <!-- LOGO: put your logo file at app/static/logo.png -->
         <div class="logoWrap" aria-hidden="true">
           <img class="logoImg" src="/static/logo-new.png" alt="" />
         </div>
         <div>
           <h1>Lawmens Tender Pack Summary</h1>
-          <p>Upload a tender ZIP → get an instant pack breakdown</p>
+          <p>Upload a tender pack → get an instant pack breakdown</p>
         </div>
       </div>
     </header>
@@ -394,16 +393,15 @@
             <span class="pill">Step 1</span>
           </div>
           <p class="hint">
-            Drop a tender pack ZIP and we’ll scan what’s inside: drawings, BOQ, registers, forms, addenda and more.
-            This is a lightweight “triage” tool — perfect for quickly seeing what you’ve actually been sent.
+            Upload tender files (ZIP, PDFs, Excel, Word, images) and we’ll scan what’s inside: drawings, BOQ, registers,
+            forms, addenda and more. This is a lightweight “triage” tool — perfect for quickly seeing what you’ve actually been sent.
           </p>
 
           <div class="upload">
-            <!-- Keep the real input (hidden) so your existing /static/app.js still works -->
-            <input id="zip" class="hiddenInput" type="file" accept=".zip" />
+            <!-- ONLY CHANGE: allow universal files + multiple selection -->
+            <input id="zip" class="hiddenInput" type="file" multiple />
 
-            <!-- NEW: click-anywhere dashed box -->
-            <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="Upload tender ZIP">
+            <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="Upload tender files">
               <div class="dzLeft">
                 <div class="dzIcon" aria-hidden="true">
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
@@ -414,16 +412,18 @@
                 </div>
                 <div class="dzText">
                   <p class="t">Click to upload (or drag and drop)</p>
-                  <p class="s" id="fileName">ZIP only • No file selected</p>
+                  <!-- ONLY CHANGE: text no longer ZIP-only -->
+                  <p class="s" id="fileName">ZIP, PDF, Excel, Word, images • No files selected</p>
                 </div>
               </div>
               <div class="dzRight">
-                <span class="dzChip">.zip</span>
+                <!-- ONLY CHANGE: chip no longer .zip -->
+                <span class="dzChip">Multiple</span>
               </div>
             </div>
 
             <div class="row" style="margin-top:12px; justify-content:space-between;">
-              <button id="btn" class="btn" onclick="uploadZip()">Analyse ZIP</button>
+              <button id="btn" class="btn" onclick="uploadZip()">Analyse</button>
 
               <div class="status">
                 <span class="pill ok" id="statusPill" style="display:none;">Ready</span>
@@ -443,7 +443,7 @@
             <div class="box">
               <b>Tips</b>
               <span>
-                If the pack is huge, keep it under ~300MB for now. For best results, make sure filenames include drawing numbers / revisions (e.g. A101 Rev P03).
+                If the pack is huge, keep it under ~300MB for now. For best results, keep filenames clear (e.g. A101 Rev P03, BOQ.xlsx).
               </span>
             </div>
             <div class="box">
@@ -469,7 +469,7 @@
 
           <div class="footer">
             <span>
-              Status updates appear top-left. If you see an error, it’s usually a corrupted ZIP or a file limit being hit.
+              Status updates appear top-left. If you see an error, it’s usually a corrupted file or a file limit being hit.
             </span>
             <span>
               Endpoint: <span class="kbd">/api/analyse</span>
@@ -483,7 +483,6 @@
 
   <script src="/static/app.js"></script>
 
-  <!-- NEW: Dropzone behaviour (no changes needed in app.js) -->
   <script>
     (function(){
       const input = document.getElementById("zip");
@@ -491,12 +490,16 @@
       const nameEl = document.getElementById("fileName");
 
       function setNameFromInput(){
-        const f = input.files && input.files[0];
-        if (!f) {
-          nameEl.textContent = "ZIP only • No file selected";
+        const files = input.files ? Array.from(input.files) : [];
+        if (!files.length) {
+          nameEl.textContent = "ZIP, PDF, Excel, Word, images • No files selected";
           return;
         }
-        nameEl.textContent = f.name;
+        if (files.length === 1) {
+          nameEl.textContent = files[0].name;
+          return;
+        }
+        nameEl.textContent = `${files.length} files selected`;
       }
 
       dz.addEventListener("click", () => input.click());
@@ -509,7 +512,6 @@
 
       input.addEventListener("change", setNameFromInput);
 
-      // drag & drop
       dz.addEventListener("dragover", (e) => {
         e.preventDefault();
         dz.classList.add("dragover");
@@ -519,19 +521,14 @@
         e.preventDefault();
         dz.classList.remove("dragover");
 
-        const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-        if (!file) return;
+        const dropped = e.dataTransfer && e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
+        if (!dropped.length) return;
 
-        // only accept .zip
-        if (!file.name.toLowerCase().endsWith(".zip")) {
-          alert("Please drop a .zip file");
-          return;
-        }
-
-        // Put dropped file into the hidden input so uploadZip() keeps working
+        // Put dropped files into the hidden input so uploadZip() keeps working
         const dt = new DataTransfer();
-        dt.items.add(file);
+        dropped.forEach(f => dt.items.add(f));
         input.files = dt.files;
+
         setNameFromInput();
       });
 
