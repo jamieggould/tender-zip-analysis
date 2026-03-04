@@ -161,16 +161,16 @@ DATE_PATTERNS = [
 ]
 
 TENDER_RETURN_PATTERNS = [
-    r"(tender|return|submit|submission)\s+(date|deadline|by)\s*[:\-]?\s*([^\n]{0,140})",
-    r"\b(deadline)\b\s*[:\-]?\s*([^\n]{0,140})",
+    r"(tender|return|submit|submission)\s+(date|deadline|by)\s*[:\-]?\s*([^\n]{0,160})",
+    r"\b(deadline)\b\s*[:\-]?\s*([^\n]{0,160})",
 ]
 SUBMISSION_PATTERNS = [
-    r"\b(submit|submission|return)\b.{0,120}\b(email|e-mail|portal|upload|address)\b.{0,120}",
+    r"\b(submit|submission|return)\b.{0,140}\b(email|e-mail|portal|upload|address)\b.{0,140}",
     r"\b(email)\b\s*[:\-]?\s*([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})",
 ]
 LD_PATTERNS = [
     r"(liquidated damages|LDs?|LADs?)\s*[:\-]?\s*(£\s?\d[\d,]*\.?\d*)",
-    r"(liquidated damages|LDs?|LADs?).{0,80}(£\s?\d[\d,]*\.?\d*)",
+    r"(liquidated damages|LDs?|LADs?).{0,100}(£\s?\d[\d,]*\.?\d*)",
 ]
 RETENTION_PATTERNS = [
     r"(retention)\s*[:\-]?\s*(\d{1,2}(\.\d+)?\s*%)",
@@ -181,19 +181,21 @@ PROGRAMME_PATTERNS = [
     r"(\d{1,3})\s*(weeks?|months?)\s*(programme|duration|contract period)",
 ]
 WORKING_HOURS_PATTERNS = [
-    r"(working hours|site hours|hours of work)\s*[:\-]?\s*([^\n]{0,160})",
-    r"(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?).{0,50}(\d{1,2}[:.]\d{2}).{0,20}(\d{1,2}[:.]\d{2})",
+    r"(working hours|site hours|hours of work)\s*[:\-]?\s*([^\n]{0,200})",
+    r"(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?).{0,60}(\d{1,2}[:.]\d{2}).{0,30}(\d{1,2}[:.]\d{2})",
 ]
 INSURANCE_PATTERNS = [
-    r"\b(public liability|employers liability|EL|PL)\b.{0,80}(£\s?\d[\d,]*\.?\d*)",
-    r"\b(insurance)\b.{0,120}(£\s?\d[\d,]*\.?\d*)",
+    r"\b(public liability|employers liability|EL|PL)\b.{0,120}(£\s?\d[\d,]*\.?\d*)",
+    r"\b(insurance)\b.{0,160}(£\s?\d[\d,]*\.?\d*)",
 ]
 ACCREDITATION_PATTERNS = [
-    r"\b(CHAS|SMAS|SafeContractor|Constructionline|ISO\s?9001|ISO\s?14001|ISO\s?45001)\b.{0,120}",
+    r"\b(CHAS|SMAS|SafeContractor|Constructionline|ISO\s?9001|ISO\s?14001|ISO\s?45001)\b.{0,180}",
 ]
 
 REQ_STRICT_RE = re.compile(r"\b(must|shall|required|mandatory|as a minimum|minimum of|no later than)\b", re.I)
 REQ_LOOSE_RE = re.compile(r"\b(should|please|requested|provide|submit|include|confirm)\b", re.I)
+
+SENT_SPLIT_RE = re.compile(r"(?<=[\.\!\?])\s+|\n+")
 
 
 def _clean_text(s: str) -> str:
@@ -218,7 +220,7 @@ def _find_evidence(text: str, patterns: list[str], max_items: int = 6) -> list[d
     for pat in patterns:
         for m in re.finditer(pat, text, flags=re.IGNORECASE):
             raw = m.group(0).strip()
-            found.append({"match": raw[:220], "evidence": _snip_context(text, m.start())})
+            found.append({"match": raw[:240], "evidence": _snip_context(text, m.start())})
             if len(found) >= max_items:
                 return found
     return found
@@ -253,9 +255,83 @@ def _extract_requirements(text: str, max_lines: int = 40) -> dict[str, list[str]
     return {"strict": dedup(strict)[:max_lines], "loose": dedup(loose)[:max_lines]}
 
 
-# HARD caps to prevent Render/timeouts (most tender value is in early pages anyway)
-PDF_MAX_PAGES = 12
-DOCX_MAX_PARAS = 250
+def _is_gibberish_line(s: str) -> bool:
+    s2 = re.sub(r"\s+", " ", (s or "")).strip()
+    if len(s2) < 10:
+        return True
+    code_tokens = re.findall(r"\b[A-Z]{1,4}[-_ ]?\d{1,4}[A-Z]?\b", s2)
+    if len(code_tokens) >= 6:
+        return True
+    letters = [c for c in s2 if c.isalpha()]
+    if letters:
+        upper_ratio = sum(1 for c in letters if c.isupper()) / max(1, len(letters))
+        if upper_ratio > 0.75 and len(s2) > 40:
+            return True
+    return False
+
+
+def _best_line_from_evidence(items: list[dict[str, str]] | None) -> str | None:
+    if not items:
+        return None
+    cand = sorted(items, key=lambda x: (len((x.get("match") or "")), len((x.get("evidence") or ""))))
+    for it in cand:
+        m = (it.get("match") or "").strip()
+        if m and not _is_gibberish_line(m):
+            return m[:240]
+    return None
+
+
+def _sentences_around(text: str, idx: int, max_sentences: int = 2) -> str:
+    if not text:
+        return ""
+    parts = SENT_SPLIT_RE.split(text)
+    offsets: list[tuple[int, int, str]] = []
+    pos = 0
+    for p in parts:
+        p2 = p.strip()
+        if not p2:
+            pos += len(p) + 1
+            continue
+        start = text.find(p2, pos)
+        if start == -1:
+            start = pos
+        end = start + len(p2)
+        offsets.append((start, end, p2))
+        pos = end
+
+    s_i = 0
+    for i, (a, b, _) in enumerate(offsets):
+        if a <= idx <= b:
+            s_i = i
+            break
+
+    chosen: list[str] = []
+    for j in range(s_i, min(len(offsets), s_i + max_sentences)):
+        sent = offsets[j][2]
+        if sent and not _is_gibberish_line(sent):
+            chosen.append(sent[:240])
+
+    return " ".join(chosen).strip()
+
+
+def _find_bucket_evidence(merged: str, needle: str, max_items: int = 1) -> list[str]:
+    merged_lc = merged.lower()
+    out: list[str] = []
+    start = 0
+    while len(out) < max_items:
+        idx = merged_lc.find(needle, start)
+        if idx == -1:
+            break
+        s = _sentences_around(merged, idx, max_sentences=2)
+        if s and s not in out:
+            out.append(s)
+        start = idx + len(needle)
+    return out
+
+
+# HARD caps to prevent Render/timeouts
+PDF_MAX_PAGES = 14
+DOCX_MAX_PARAS = 280
 DOCX_MAX_TABLES = 30
 DOCX_MAX_TABLE_ROWS = 140
 
@@ -296,7 +372,7 @@ def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, An
         info["date_candidates"] = sorted(dates)[:30]
 
         info["snippet"] = text[:1200]
-        info["text"] = text[:20000]  # internal use only
+        info["text"] = text[:22000]  # internal use only
         info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
@@ -340,7 +416,7 @@ def extract_docx_info(path: Path, max_paras: int = DOCX_MAX_PARAS) -> dict[str, 
         info["keyword_hits"] = dict(sorted(hits.items(), key=lambda x: x[1], reverse=True)[:25])
 
         info["snippet"] = text[:1200]
-        info["text"] = text[:20000]  # internal use only
+        info["text"] = text[:22000]  # internal use only
         info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
@@ -450,10 +526,8 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
                 text_blobs.append(t)
 
             req = ex.get("requirements") or {}
-            for s in req.get("strict", []) or []:
-                strict_reqs.append(s)
-            for s in req.get("loose", []) or []:
-                loose_reqs.append(s)
+            strict_reqs.extend(req.get("strict", []) or [])
+            loose_reqs.extend(req.get("loose", []) or [])
 
     merged = "\n\n".join(text_blobs)[:160000]
     merged_lc = merged.lower()
@@ -467,30 +541,7 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
     insurance = _find_evidence(merged, INSURANCE_PATTERNS, max_items=8)
     accreditations = _find_evidence(merged, ACCREDITATION_PATTERNS, max_items=10)
 
-    risks: dict[str, Any] = {}
-    for bucket, needles in RISK_BUCKETS.items():
-        count = 0
-        evidence: list[str] = []
-        for needle in needles:
-            if needle in merged_lc:
-                count += merged_lc.count(needle)
-                start = 0
-                for _ in range(2):
-                    idx = merged_lc.find(needle, start)
-                    if idx == -1:
-                        break
-                    evidence.append(_snip_context(merged, idx))
-                    start = idx + len(needle)
-        if count > 0:
-            dedup: list[str] = []
-            seen: set[str] = set()
-            for e in evidence:
-                k = e.lower()
-                if k not in seen:
-                    seen.add(k)
-                    dedup.append(e)
-            risks[bucket] = {"mentions": count, "evidence": dedup[:6]}
-
+    # flatten dates from per-doc extraction
     date_candidates: set[str] = set()
     for _, items in sections.items():
         for it in items:
@@ -498,33 +549,118 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
             for d in ex.get("date_candidates", []) or []:
                 date_candidates.add(str(d))
 
-    def dedup_list(items: list[str], limit: int) -> list[str]:
+    def dedup_clean(items: list[str], limit: int) -> list[str]:
         out: list[str] = []
         seen: set[str] = set()
         for x in items:
-            k = x.strip().lower()
-            if not k or k in seen:
+            x2 = re.sub(r"\s+", " ", (x or "")).strip()
+            if not x2 or _is_gibberish_line(x2):
+                continue
+            k = x2.lower()
+            if k in seen:
                 continue
             seen.add(k)
-            out.append(x.strip())
+            out.append(x2[:260])
             if len(out) >= limit:
                 break
         return out
 
+    strict_clean = dedup_clean(strict_reqs, 25)
+    loose_clean = dedup_clean(loose_reqs, 25)
+
+    # build clean constraints (not massive context windows)
+    constraints: list[str] = []
+    for bucket, needles in RISK_BUCKETS.items():
+        mentions = 0
+        ev_lines: list[str] = []
+        for needle in needles:
+            if needle in merged_lc:
+                mentions += merged_lc.count(needle)
+                ev_lines.extend(_find_bucket_evidence(merged, needle, max_items=1))
+        if mentions:
+            ev = next((e for e in ev_lines if e and not _is_gibberish_line(e)), "")
+            line = f"{bucket} ({mentions} mentions)"
+            if ev:
+                line += f": {ev}"
+            constraints.append(line)
+
+    headline_deadline = _best_line_from_evidence(tender_return) or (sorted(date_candidates)[0] if date_candidates else None)
+    headline_submission = _best_line_from_evidence(submission)
+    headline_ld = _best_line_from_evidence(ld)
+    headline_ret = _best_line_from_evidence(retention)
+    headline_prog = _best_line_from_evidence(programme)
+    headline_hours = _best_line_from_evidence(working_hours)
+    headline_ins = _best_line_from_evidence(insurance)
+
+    missing: list[str] = []
+    if not tender_return and not date_candidates:
+        missing.append("Tender return date / deadline not found")
+    if not submission:
+        missing.append("Submission method (email/portal/address) not found")
+    if not programme:
+        missing.append("Programme / duration not found")
+    if not working_hours:
+        missing.append("Working hours not found")
+    if not retention:
+        missing.append("Retention not found")
+    if not ld:
+        missing.append("Liquidated damages / LADs not found")
+    if not insurance:
+        missing.append("Insurance levels not found")
+    if not accreditations:
+        missing.append("Accreditations (CHAS/SMAS/etc) not found")
+
+    lines: list[str] = []
+    lines.append("EXECUTIVE SUMMARY")
+    if headline_deadline:
+        lines.append(f"• Deadline / key date: {headline_deadline}")
+    if headline_submission:
+        lines.append(f"• Submission route: {headline_submission}")
+    if headline_prog:
+        lines.append(f"• Programme / duration: {headline_prog}")
+    if headline_hours:
+        lines.append(f"• Working hours: {headline_hours}")
+    if headline_ret:
+        lines.append(f"• Retention: {headline_ret}")
+    if headline_ld:
+        lines.append(f"• LD / LADs: {headline_ld}")
+    if headline_ins:
+        lines.append(f"• Insurance: {headline_ins}")
+
+    if len(lines) == 1:
+        lines.append("• No commercial headline terms confidently detected in the first-pass scan.")
+
+    executive_summary = "\n".join(lines)
+
     return {
-        "date_candidates": sorted(date_candidates)[:40],
-        "tender_return_candidates": tender_return,
-        "submission_candidates": submission,
-        "liquidated_damages_candidates": ld,
-        "retention_candidates": retention,
-        "programme_candidates": programme,
-        "working_hours_candidates": working_hours,
-        "insurance_candidates": insurance,
-        "accreditations_candidates": accreditations,
-        "risk_buckets": risks,
-        "requirements_strict": dedup_list(strict_reqs, 60),
-        "requirements_loose": dedup_list(loose_reqs, 60),
+        "executive_summary": executive_summary,
+        "key_facts": {
+            "deadline_or_key_date": headline_deadline,
+            "submission_route": headline_submission,
+            "programme_duration": headline_prog,
+            "working_hours": headline_hours,
+            "retention": headline_ret,
+            "liquidated_damages": headline_ld,
+            "insurance_levels": headline_ins,
+            "accreditations": [x.get("match") for x in (accreditations or [])][:8],
+        },
+        "dates_found": sorted(date_candidates)[:40],
+        "constraints": constraints[:12],
+        "requirements_strict": strict_clean,
+        "requirements_loose": loose_clean,
+        "missing": missing,
         "sources_scanned": len(text_blobs),
+        # keep evidence for debugging / future UI toggles, but don’t render by default
+        "evidence": {
+            "tender_return_candidates": tender_return[:6],
+            "submission_candidates": submission[:6],
+            "programme_candidates": programme[:6],
+            "working_hours_candidates": working_hours[:6],
+            "retention_candidates": retention[:6],
+            "liquidated_damages_candidates": ld[:6],
+            "insurance_candidates": insurance[:6],
+            "accreditations_candidates": accreditations[:8],
+        },
     }
 
 
@@ -548,7 +684,6 @@ def home(request: Request):
 
 @app.post("/api/analyse")
 async def analyse(zip_file: list[UploadFile] = File(...)):
-    # IMPORTANT: top-level try so we never drop the connection without JSON
     try:
         if not zip_file:
             return JSONResponse({"error": "No files uploaded."}, status_code=400)
@@ -616,7 +751,7 @@ async def analyse(zip_file: list[UploadFile] = File(...)):
             def has_cat(cat: str) -> bool:
                 return len(sections.get(cat, [])) > 0
 
-            # 3) estimator-grade briefing (uses internal 'text' blobs)
+            # 3) briefing (now returns executive_summary/constraints/missing)
             briefing = extract_pack_briefing(sections)
 
             # 4) strip internal heavy fields BEFORE responding
@@ -644,5 +779,4 @@ async def analyse(zip_file: list[UploadFile] = File(...)):
             return JSONResponse(report)
 
     except Exception as e:
-        # If ANYTHING blows up, return JSON instead of dropping the connection
         return JSONResponse({"error": f"Analyse failed: {e}"}, status_code=500)
