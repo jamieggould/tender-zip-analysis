@@ -11,13 +11,16 @@ async function uploadZip() {
   const downloadBtn = document.getElementById("downloadBtn");
 
   if (!fileInput.files.length) {
-    alert("Choose a .zip file first");
+    alert("Choose files first");
     return;
   }
 
-  const f = fileInput.files[0];
   const fd = new FormData();
-  fd.append("zip_file", f);
+
+  // FIX: send all selected files instead of only the first
+  for (const f of fileInput.files) {
+    fd.append("zip_file", f);
+  }
 
   btn.disabled = true;
   downloadBtn.disabled = true;
@@ -51,7 +54,12 @@ async function uploadZip() {
 
 function downloadJson() {
   if (!lastJson) return;
-  const blob = new Blob([JSON.stringify(lastJson, null, 2)], { type: "application/json" });
+
+  const blob = new Blob(
+    [JSON.stringify(lastJson, null, 2)],
+    { type: "application/json" }
+  );
+
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
