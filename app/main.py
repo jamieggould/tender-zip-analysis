@@ -7,7 +7,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 from collections import Counter, defaultdict
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -778,18 +778,29 @@ def home(request: Request):
 
 
 @app.post("/api/analyse")
-async def analyse(zip_file: list[UploadFile] = File(...)):
+async def analyse(
+    zip_file: Optional[list[UploadFile]] = File(None),
+    files: Optional[list[UploadFile]] = File(None),
+    file: Optional[UploadFile] = File(None),
+):
     """
     Accepts:
       - one or more .zip files (will be extracted)
       - OR many individual files (including folder uploads where uf.filename contains subfolders)
 
     Key fix:
-      - the previous deploy failed due to indentation / broken if/else.
-      - this keeps folder structure safely (no traversal).
+      - accept multiple common multipart field names (zip_file / files / file) so the frontend can't mismatch.
     """
     try:
-        if not zip_file:
+        uploads: list[UploadFile] = []
+        if zip_file:
+            uploads.extend(zip_file)
+        if files:
+            uploads.extend(files)
+        if file:
+            uploads.append(file)
+
+        if not uploads:
             return JSONResponse({"error": "No files uploaded."}, status_code=400)
 
         max_bytes = 300 * 1024 * 1024
@@ -806,7 +817,7 @@ async def analyse(zip_file: list[UploadFile] = File(...)):
             scanned_paths: list[tuple[Path, str]] = []
 
             # 1) ingest: save uploads, unzip zips
-            for uf in zip_file:
+            for uf in uploads:
                 if not uf.filename:
                     continue
 
