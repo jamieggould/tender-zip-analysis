@@ -824,30 +824,30 @@ async def analyse(zip_file: list[UploadFile] = File(...)):
                 if len(content) > max_bytes:
                     return JSONResponse({"error": f"File too large (limit 300MB): {uf.filename}"}, status_code=400)
 
-                if uf.filename.lower().endswith(".zip"):
-                    zp = tmp_path / f"upload_{len(uploaded_names)}.zip"
-                    zp.write_bytes(content)
-                    try:
-                        extracted = safe_extract_zip(zp, extract_dir, max_files=5000)
-                    except Exception as e:
-                        return JSONResponse({"error": f"Could not extract ZIP {uf.filename}: {e}"}, status_code=400)
+               if uf.filename.lower().endswith(".zip"):
+    zp = tmp_path / f"upload_{len(uploaded_names)}.zip"
+    zp.write_bytes(content)
+    try:
+        extracted = safe_extract_zip(zp, extract_dir, max_files=5000)
+    except Exception as e:
+        return JSONResponse({"error": f"Could not extract ZIP {uf.filename}: {e}"}, status_code=400)
 
-                    for p in extracted:
-                        scanned_paths.append((p, str(p.relative_to(extract_dir))))
-                           else:
-                # Preserve folder structure if the browser provides it (folder upload)
-                # UploadFile.filename will be the relative path when using webkitdirectory
-                rel = (uf.filename or "").replace("\\", "/").lstrip("/")
+    for p in extracted:
+        scanned_paths.append((p, str(p.relative_to(extract_dir))))
 
-                # prevent traversal + remove empty/. /.. segments
-                rel_path = Path(rel)
-                safe_rel = Path(*[p for p in rel_path.parts if p not in ("", ".", "..")])
+              else:
+    # Preserve folder structure if the browser provides it (folder upload)
+    rel = (uf.filename or "").replace("\\", "/").lstrip("/")
 
-                op = tmp_path / safe_rel
-                op.parent.mkdir(parents=True, exist_ok=True)
-                op.write_bytes(content)
+    # prevent traversal + remove empty/. /.. segments
+    rel_path = Path(rel)
+    safe_rel = Path(*[p for p in rel_path.parts if p not in ("", ".", "..")])
 
-                scanned_paths.append((op, str(safe_rel)))
+    op = tmp_path / safe_rel
+    op.parent.mkdir(parents=True, exist_ok=True)
+    op.write_bytes(content)
+
+    scanned_paths.append((op, str(safe_rel)))
 
             # 2) classify + extract (guard: cap total processed files)
             total_files = 0
