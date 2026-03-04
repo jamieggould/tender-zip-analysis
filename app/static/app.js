@@ -14,23 +14,20 @@ function setStatus(text) {
 function formatReport(data) {
   // Prefer the new “1–2 page briefing” renderer if present
   if (window.renderTenderReport && typeof window.renderTenderReport === "function") {
-    // The renderer writes to #out itself, but we return a string too as a safe fallback.
-    // (If you want, you can ignore the return value.)
     try {
       window.renderTenderReport(data);
       return ""; // renderer handled output
     } catch (e) {
-      // If renderer fails for any reason, fall back to legacy output
       console.warn("renderTenderReport failed, falling back:", e);
     }
   }
 
-  // --- Legacy output (your original formatter), kept with minimal tweaks ---
+  // --- Legacy output (kept as-is, with the briefing section included) ---
   if (!data || !data.summary) return JSON.stringify(data, null, 2);
 
   const s = data.summary;
   const sections = data.sections || {};
-  const briefing = data.briefing || {}; // new backend field (safe if missing)
+  const briefing = data.briefing || {};
 
   let out = "";
 
@@ -75,8 +72,6 @@ function formatReport(data) {
     out += "\n";
   }
 
-  // NEW (minimal): If briefing exists, show the important bits before keyword spam
-  // This keeps your app “useful” even without the HTML renderer.
   if (briefing && Object.keys(briefing).length) {
     const ev = (items, title, max = 4) => {
       if (!items || !items.length) return;
@@ -132,7 +127,6 @@ function formatReport(data) {
     }
   }
 
-  // Keep your old “keywords” section as a fallback (but only if briefing wasn't present)
   if ((!briefing || !Object.keys(briefing).length) && sections.pdfs) {
     let keywords = {};
 
@@ -189,7 +183,6 @@ async function uploadZip() {
   }
 
   const fd = new FormData();
-
   for (const f of fileInput.files) {
     fd.append("zip_file", f);
   }
@@ -201,13 +194,33 @@ async function uploadZip() {
   setStatus("Uploading…");
   out.textContent = "Analysing tender pack…";
 
+  // IMPORTANT: make load failures deterministic + cancellable
+  const controller = new AbortController();
+  const timeoutMs = 120000; // 2 minutes (Render can be slow on PDFs)
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
-    const res = await fetch("/api/analyse", { method: "POST", body: fd });
+    const res = await fetch("/api/analyse", {
+      method: "POST",
+      body: fd,
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        "Accept": "application/json",
+      },
+    });
+
     const text = await res.text();
 
     if (!res.ok) {
+      // Try to show a clean JSON error if backend returned it
       setStatus("Error");
-      out.textContent = text;
+      try {
+        const errJson = JSON.parse(text);
+        out.textContent = errJson.error ? String(errJson.error) : JSON.stringify(errJson, null, 2);
+      } catch {
+        out.textContent = text || `Request failed with status ${res.status}`;
+      }
       return;
     }
 
@@ -224,8 +237,16 @@ async function uploadZip() {
     downloadBtn.disabled = false;
   } catch (e) {
     setStatus("Error");
-    out.textContent = String(e);
+
+    // Give a useful message instead of just "TypeError: Load failed"
+    const msg =
+      (e && e.name === "AbortError")
+        ? `Request timed out after ${Math.round(timeoutMs / 1000)}s.\n\nThis usually means the server is taking too long to parse PDFs or crashed mid-request.`
+        : `Request failed (network/server).\n\nOpen DevTools → Network and click /api/analyse for the real status.\n\n${String(e)}`;
+
+    out.textContent = msg;
   } finally {
+    clearTimeout(timer);
     btn.disabled = false;
   }
 }
