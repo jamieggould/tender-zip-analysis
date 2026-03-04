@@ -133,7 +133,6 @@ def guess_drawing_number(filename: str) -> str | None:
 
 
 # ---------------- extraction helpers ----------------
-# Keep your original “mentions” behaviour, but the new briefing uses these as signals too.
 ESTIMATOR_KEYWORDS = [
     "asbestos", "soft strip", "strip out", "demolition", "temporary works", "propping",
     "party wall", "working hours", "out of hours", "noise", "dust", "vibration",
@@ -161,7 +160,6 @@ DATE_PATTERNS = [
     r"\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b",
 ]
 
-# Evidence patterns for the “1–2 page briefing” sections
 TENDER_RETURN_PATTERNS = [
     r"(tender|return|submit|submission)\s+(date|deadline|by)\s*[:\-]?\s*([^\n]{0,140})",
     r"\b(deadline)\b\s*[:\-]?\s*([^\n]{0,140})",
@@ -194,7 +192,6 @@ ACCREDITATION_PATTERNS = [
     r"\b(CHAS|SMAS|SafeContractor|Constructionline|ISO\s?9001|ISO\s?14001|ISO\s?45001)\b.{0,120}",
 ]
 
-# “Requirements” extraction (strict vs loose)
 REQ_STRICT_RE = re.compile(r"\b(must|shall|required|mandatory|as a minimum|minimum of|no later than)\b", re.I)
 REQ_LOOSE_RE = re.compile(r"\b(should|please|requested|provide|submit|include|confirm)\b", re.I)
 
@@ -226,15 +223,9 @@ def _find_evidence(text: str, patterns: list[str], max_items: int = 6) -> list[d
 
 
 def _extract_requirements(text: str, max_lines: int = 40) -> dict[str, list[str]]:
-    """
-    Returns:
-      - strict: MUST/SHALL/REQUIRED style lines
-      - loose: SHOULD/PLEASE/REQUESTED etc lines
-    """
     strict: list[str] = []
     loose: list[str] = []
 
-    # Split into rough “lines” but keep long lines under control
     lines = [l.strip() for l in re.split(r"[\r\n]+", text) if l and l.strip()]
     for l in lines:
         if len(l) < 6:
@@ -247,7 +238,6 @@ def _extract_requirements(text: str, max_lines: int = 40) -> dict[str, list[str]
         if len(strict) >= max_lines and len(loose) >= max_lines:
             break
 
-    # De-dupe while preserving order
     def dedup(items: list[str]) -> list[str]:
         out: list[str] = []
         seen: set[str] = set()
@@ -262,10 +252,6 @@ def _extract_requirements(text: str, max_lines: int = 40) -> dict[str, list[str]
 
 
 def extract_pdf_info(path: Path, max_pages: int = 20) -> dict[str, Any]:
-    """
-    Key change: we keep a capped 'text' field for pack-wide briefing.
-    Still safe (page cap + text cap).
-    """
     info: dict[str, Any] = {
         "pages": None,
         "keyword_hits": {},
@@ -301,9 +287,7 @@ def extract_pdf_info(path: Path, max_pages: int = 20) -> dict[str, Any]:
         info["date_candidates"] = sorted(dates)[:30]
 
         info["snippet"] = text[:1600]
-        info["text"] = text[:25000]  # <-- used for pack briefing
-
-        # Requirements extraction (strict/loose)
+        info["text"] = text[:25000]  # internal use (briefing)
         info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
@@ -313,10 +297,6 @@ def extract_pdf_info(path: Path, max_pages: int = 20) -> dict[str, Any]:
 
 
 def extract_docx_info(path: Path, max_paras: int = 500) -> dict[str, Any]:
-    """
-    Key change: includes table text (prelims/specs often live in tables).
-    Also keeps capped 'text' for pack-wide briefing.
-    """
     info: dict[str, Any] = {"headings": [], "keyword_hits": {}, "snippet": "", "text_len": 0}
 
     try:
@@ -351,9 +331,7 @@ def extract_docx_info(path: Path, max_paras: int = 500) -> dict[str, Any]:
         info["keyword_hits"] = dict(sorted(hits.items(), key=lambda x: x[1], reverse=True)[:25])
 
         info["snippet"] = text[:1600]
-        info["text"] = text[:25000]  # <-- used for pack briefing
-
-        # Requirements extraction (strict/loose)
+        info["text"] = text[:25000]  # internal use (briefing)
         info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
@@ -450,18 +428,7 @@ def extract_by_type(path: Path, category: str) -> dict[str, Any]:
     return {}
 
 
-# ---------------- NEW: pack-wide estimator briefing ----------------
 def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
-    """
-    Builds the “read 1–2 pages instead of 60” output:
-      - Key Dates / Tender Return candidates
-      - Submission route (email/portal hints)
-      - Commercials (LD, retention, programme, working hours)
-      - Insurance / accreditations signals
-      - Risk buckets with evidence
-      - Requirements (strict vs loose) aggregated pack-wide
-    """
-    # Collect text from “wordy” categories (where the tender rules live)
     text_blobs: list[str] = []
     strict_reqs: list[str] = []
     loose_reqs: list[str] = []
@@ -498,7 +465,6 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
         for needle in needles:
             if needle in merged_lc:
                 count += merged_lc.count(needle)
-                # capture up to 2 snippets per needle
                 start = 0
                 for _ in range(2):
                     idx = merged_lc.find(needle, start)
@@ -507,7 +473,6 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
                     evidence.append(_snip_context(merged, idx))
                     start = idx + len(needle)
         if count > 0:
-            # de-dup evidence
             dedup: list[str] = []
             seen: set[str] = set()
             for e in evidence:
@@ -517,7 +482,6 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
                     dedup.append(e)
             risks[bucket] = {"mentions": count, "evidence": dedup[:6]}
 
-    # Dates detected per-doc: flatten
     date_candidates: set[str] = set()
     for _, items in sections.items():
         for it in items:
@@ -525,7 +489,6 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
             for d in ex.get("date_candidates", []) or []:
                 date_candidates.add(str(d))
 
-    # De-dupe requirements (pack-wide)
     def dedup_list(items: list[str], limit: int) -> list[str]:
         out: list[str] = []
         seen: set[str] = set()
@@ -554,6 +517,26 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
         "requirements_loose": dedup_list(loose_reqs, 60),
         "sources_scanned": len(text_blobs),
     }
+
+
+# ---------------- FIX: strip big fields before returning JSON ----------------
+def _strip_internal_fields(sections: dict[str, list[dict[str, Any]]]) -> None:
+    """
+    Prevents huge responses (and fetch 'Load failed') by removing internal-only fields.
+    We keep the briefing output + small per-file metadata/snippets.
+    """
+    for items in sections.values():
+        for it in items:
+            ex = it.get("extracted")
+            if isinstance(ex, dict):
+                # huge internal blob used for pack briefing generation
+                ex.pop("text", None)
+
+                # spreadsheet previews can balloon across many sheets/files
+                if isinstance(ex.get("sheets"), list):
+                    for sh in ex["sheets"]:
+                        if isinstance(sh, dict):
+                            sh.pop("preview_rows", None)
 
 
 # ---------------- routes ----------------
@@ -629,8 +612,11 @@ async def analyse(zip_file: list[UploadFile] = File(...)):
         def has_cat(cat: str) -> bool:
             return len(sections.get(cat, [])) > 0
 
-        # 3) NEW: estimator-grade briefing (the “1–2 page read”)
+        # 3) estimator-grade briefing (uses internal 'text' blobs)
         briefing = extract_pack_briefing(sections)
+
+        # 4) FIX: keep response small so fetch doesn't fail
+        _strip_internal_fields(sections)
 
         report = {
             "summary": {
@@ -647,8 +633,8 @@ async def analyse(zip_file: list[UploadFile] = File(...)):
                 "specs_found": has_cat("specs"),
                 "addenda_found": has_cat("addenda"),
             },
-            "briefing": briefing,           # <-- use this in your UI instead of “water mentioned 28 times”
-            "sections": dict(sections),     # <-- IMPORTANT: convert defaultdict -> dict for JSON serialization
+            "briefing": briefing,
+            "sections": dict(sections),
         }
 
         return JSONResponse(report)
