@@ -185,7 +185,7 @@ justify-content:space-between;
 margin-bottom:10px;
 }
 
-/* ===== ONLY CHANGE MADE HERE ===== */
+/* ===== ONLY CHANGE MADE HERE (kept) ===== */
 
 .pre{
 margin:0;
@@ -203,7 +203,7 @@ font-family:Inter,system-ui;
 white-space:pre-wrap;
 }
 
-/* ================================= */
+/* ===================================== */
 
 .footer{
 margin-top:14px;
@@ -382,7 +382,7 @@ input.files=dt.files
 nameEl.textContent=input.files.length+" files selected"
 })
 
-/* -------- NEW: render the new briefing nicely (no backend changes needed) -------- */
+/* -------- FIX: render an actual summary (use executive_summary/constraints/missing) -------- */
 window.renderTenderReport = function(data){
 try{
 if(!data){
@@ -394,29 +394,15 @@ const s = data.summary || {}
 const b = data.briefing || {}
 
 function line(txt=""){ return txt + "\n" }
+function badge(ok){ return ok ? "[FOUND]" : "[NOT FOUND]" }
 
-function renderEvidenceList(items, title){
-let t = ""
-if(!items || !items.length) return ""
-t += line(title)
-for(const it of items){
-const m = (it.match || "").trim()
-const ev = (it.evidence || "").trim()
-if(m) t += line("• " + m)
-if(ev) t += line("  - " + ev)
-}
-t += line()
-return t
-}
-
-function renderReqList(items, title, max=18){
+function listBlock(title, items, max=10){
 if(!items || !items.length) return ""
 let t = ""
 t += line(title)
-const slice = items.slice(0, max)
-for(const r of slice){
-t += line("• " + r)
-}
+items.slice(0,max).forEach(x=>{
+t += line("• " + String(x))
+})
 if(items.length > max){
 t += line("• … (" + (items.length - max) + " more)")
 }
@@ -424,39 +410,21 @@ t += line()
 return t
 }
 
-function renderRiskBuckets(rb){
-if(!rb) return ""
-const keys = Object.keys(rb)
-if(!keys.length) return ""
-let t = ""
-t += line("KEY RISKS / CONSTRAINTS")
-for(const k of keys){
-const item = rb[k] || {}
-const mentions = item.mentions || 0
-t += line("• " + k + " — " + mentions + " mention" + (mentions===1?"":"s"))
-const evs = (item.evidence || []).slice(0,2)
-for(const ev of evs){
-t += line("  - " + ev)
-}
-}
-t += line()
-return t
-}
-
-function badge(ok){
-return ok ? "[FOUND]" : "[NOT FOUND]"
-}
-
 let text = ""
 text += line("TENDER PACK BRIEFING")
 text += line("--------------------------------------------------")
-text += line("FILES ANALYSED")
-text += line("• Total files: " + (s.total_files_scanned ?? 0))
-if(s.by_category){
-const cats = Object.entries(s.by_category).sort((a,b)=>b[1]-a[1]).slice(0,8)
-text += line("• Top categories: " + cats.map(([k,v])=>k+" ("+v+")").join(", "))
-}
+
+/* Executive summary (human) */
+if(b.executive_summary){
+text += line(b.executive_summary.trim())
 text += line()
+} else {
+text += line("EXECUTIVE SUMMARY")
+text += line("• No executive summary returned yet (backend needs to provide briefing.executive_summary).")
+text += line()
+}
+
+/* Pack contents */
 text += line("PACK CONTENT CHECK")
 text += line("• BOQ / Pricing: " + badge(!!s.boq_found))
 text += line("• Registers: " + badge(!!s.register_found))
@@ -467,30 +435,49 @@ text += line("• Specs: " + badge(!!s.specs_found))
 text += line("• Addenda: " + badge(!!s.addenda_found))
 text += line()
 
-if(b.date_candidates && b.date_candidates.length){
-text += line("DATES FOUND (CANDIDATES)")
-text += line("• " + b.date_candidates.slice(0,12).join(" · "))
-if(b.date_candidates.length > 12){
-text += line("• … (" + (b.date_candidates.length - 12) + " more)")
+/* Dates */
+const dates = b.dates_found || b.date_candidates || []
+if(dates && dates.length){
+text += line("DATES FOUND")
+text += line("• " + dates.slice(0,12).join(" · "))
+if(dates.length > 12){
+text += line("• … (" + (dates.length - 12) + " more)")
 }
 text += line()
 }
 
-text += renderEvidenceList(b.tender_return_candidates, "TENDER RETURN / DEADLINE (EVIDENCE)")
-text += renderEvidenceList(b.submission_candidates, "SUBMISSION ROUTE (EVIDENCE)")
-text += renderEvidenceList(b.programme_candidates, "PROGRAMME / DURATION (EVIDENCE)")
-text += renderEvidenceList(b.working_hours_candidates, "WORKING HOURS (EVIDENCE)")
-text += renderEvidenceList(b.retention_candidates, "RETENTION (EVIDENCE)")
-text += renderEvidenceList(b.liquidated_damages_candidates, "LIQUIDATED DAMAGES / LADs (EVIDENCE)")
-text += renderEvidenceList(b.insurance_candidates, "INSURANCE LEVELS (EVIDENCE)")
-text += renderEvidenceList(b.accreditations_candidates, "ACCREDITATIONS / COMPLIANCE (EVIDENCE)")
+/* Key facts (structured) */
+if(b.key_facts && Object.keys(b.key_facts).length){
+text += line("KEY FACTS (DETECTED)")
+const kf = b.key_facts
+if(kf.deadline_or_key_date) text += line("• Deadline / key date: " + kf.deadline_or_key_date)
+if(kf.submission_route) text += line("• Submission route: " + kf.submission_route)
+if(kf.programme_duration) text += line("• Programme / duration: " + kf.programme_duration)
+if(kf.working_hours) text += line("• Working hours: " + kf.working_hours)
+if(kf.retention) text += line("• Retention: " + kf.retention)
+if(kf.liquidated_damages) text += line("• LD / LADs: " + kf.liquidated_damages)
+if(kf.insurance_levels) text += line("• Insurance: " + kf.insurance_levels)
+if(kf.accreditations && kf.accreditations.length){
+text += line("• Accreditations: " + kf.accreditations.slice(0,6).join(", "))
+}
+text += line()
+}
 
-text += renderRiskBuckets(b.risk_buckets)
+/* Constraints (clean bullets) */
+if(b.constraints && b.constraints.length){
+text += listBlock("KEY CONSTRAINTS (TOP)", b.constraints, 10)
+}
 
-text += renderReqList(b.requirements_strict, "MANDATORY REQUIREMENTS (STRICT)")
-text += renderReqList(b.requirements_loose, "OTHER SUBMISSION REQUESTS (LOOSE)")
+/* Requirements (keep short + useful) */
+text += listBlock("MANDATORY REQUIREMENTS (STRICT)", b.requirements_strict || [], 14)
+text += listBlock("OTHER SUBMISSION REQUESTS (LOOSE)", b.requirements_loose || [], 14)
 
-// fallback: if briefing missing (old backend)
+/* Missing (what you need to chase) */
+if(b.missing && b.missing.length){
+text += listBlock("NOT FOUND (CHASE THESE)", b.missing, 14)
+}
+
+/* Fallback if briefing missing */
 if(!Object.keys(b).length){
 text = "This JSON doesn't contain a 'briefing' section yet.\n\n" +
 "Make sure your backend returns:\n- report.briefing\n- report.sections\n\n" +
