@@ -213,6 +213,8 @@ def _snip_context(text: str, idx: int, window: int = 140) -> str:
 
 def _find_evidence(text: str, patterns: list[str], max_items: int = 6) -> list[dict[str, str]]:
     found: list[dict[str, str]] = []
+    if not text:
+        return found
     for pat in patterns:
         for m in re.finditer(pat, text, flags=re.IGNORECASE):
             raw = m.group(0).strip()
@@ -251,7 +253,14 @@ def _extract_requirements(text: str, max_lines: int = 40) -> dict[str, list[str]
     return {"strict": dedup(strict)[:max_lines], "loose": dedup(loose)[:max_lines]}
 
 
-def extract_pdf_info(path: Path, max_pages: int = 20) -> dict[str, Any]:
+# HARD caps to prevent Render/timeouts (most tender value is in early pages anyway)
+PDF_MAX_PAGES = 12
+DOCX_MAX_PARAS = 250
+DOCX_MAX_TABLES = 30
+DOCX_MAX_TABLE_ROWS = 140
+
+
+def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, Any]:
     info: dict[str, Any] = {
         "pages": None,
         "keyword_hits": {},
@@ -286,8 +295,8 @@ def extract_pdf_info(path: Path, max_pages: int = 20) -> dict[str, Any]:
                 dates.add(m.group(1))
         info["date_candidates"] = sorted(dates)[:30]
 
-        info["snippet"] = text[:1600]
-        info["text"] = text[:25000]  # internal use (briefing)
+        info["snippet"] = text[:1200]
+        info["text"] = text[:20000]  # internal use only
         info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
@@ -296,7 +305,7 @@ def extract_pdf_info(path: Path, max_pages: int = 20) -> dict[str, Any]:
     return info
 
 
-def extract_docx_info(path: Path, max_paras: int = 500) -> dict[str, Any]:
+def extract_docx_info(path: Path, max_paras: int = DOCX_MAX_PARAS) -> dict[str, Any]:
     info: dict[str, Any] = {"headings": [], "keyword_hits": {}, "snippet": "", "text_len": 0}
 
     try:
@@ -306,8 +315,8 @@ def extract_docx_info(path: Path, max_paras: int = 500) -> dict[str, Any]:
         paras = paras[:max_paras]
 
         table_lines: list[str] = []
-        for table in doc.tables[:60]:
-            for row in table.rows[:250]:
+        for table in doc.tables[:DOCX_MAX_TABLES]:
+            for row in table.rows[:DOCX_MAX_TABLE_ROWS]:
                 cells = [c.text.strip() for c in row.cells if c.text and c.text.strip()]
                 if cells:
                     table_lines.append(" | ".join(cells)[:420])
@@ -330,8 +339,8 @@ def extract_docx_info(path: Path, max_paras: int = 500) -> dict[str, Any]:
                 hits[kw] = text_lc.count(kw)
         info["keyword_hits"] = dict(sorted(hits.items(), key=lambda x: x[1], reverse=True)[:25])
 
-        info["snippet"] = text[:1600]
-        info["text"] = text[:25000]  # internal use (briefing)
+        info["snippet"] = text[:1200]
+        info["text"] = text[:20000]  # internal use only
         info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
@@ -365,11 +374,11 @@ def extract_xlsx_info(path: Path) -> dict[str, Any]:
 
     try:
         wb = load_workbook(filename=str(path), data_only=True, read_only=True)
-        for name in wb.sheetnames[:30]:
+        for name in wb.sheetnames[:20]:
             ws = wb[name]
             rows: list[list[str]] = []
-            for r in ws.iter_rows(min_row=1, max_row=60, values_only=True):
-                rows.append([("" if v is None else str(v)).strip() for v in r][:40])
+            for r in ws.iter_rows(min_row=1, max_row=40, values_only=True):
+                rows.append([("" if v is None else str(v)).strip() for v in r][:30])
 
             header = rows[0] if rows else []
             colmap = detect_boq_columns(header) if header else {}
@@ -378,7 +387,7 @@ def extract_xlsx_info(path: Path) -> dict[str, Any]:
                 "name": name,
                 "header_guess": header[:20],
                 "boq_column_map": colmap,
-                "preview_rows": rows[:10],
+                "preview_rows": rows[:8],
             })
 
     except Exception as e:
@@ -394,14 +403,14 @@ def extract_csv_info(path: Path) -> dict[str, Any]:
             reader = csv.reader(f)
             rows: list[list[str]] = []
             for i, r in enumerate(reader):
-                rows.append([c.strip() for c in r][:40])
-                if i >= 40:
+                rows.append([c.strip() for c in r][:30])
+                if i >= 30:
                     break
 
         header = rows[0] if rows else []
         info["header_guess"] = header[:20]
         info["boq_column_map"] = detect_boq_columns(header) if header else {}
-        info["preview_rows"] = rows[:10]
+        info["preview_rows"] = rows[:8]
 
     except Exception as e:
         info["error"] = f"CSV read failed: {e}"
@@ -446,7 +455,7 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
             for s in req.get("loose", []) or []:
                 loose_reqs.append(s)
 
-    merged = "\n\n".join(text_blobs)[:200000]
+    merged = "\n\n".join(text_blobs)[:160000]
     merged_lc = merged.lower()
 
     tender_return = _find_evidence(merged, TENDER_RETURN_PATTERNS, max_items=8)
@@ -519,20 +528,12 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
     }
 
 
-# ---------------- FIX: strip big fields before returning JSON ----------------
 def _strip_internal_fields(sections: dict[str, list[dict[str, Any]]]) -> None:
-    """
-    Prevents huge responses (and fetch 'Load failed') by removing internal-only fields.
-    We keep the briefing output + small per-file metadata/snippets.
-    """
     for items in sections.values():
         for it in items:
             ex = it.get("extracted")
             if isinstance(ex, dict):
-                # huge internal blob used for pack briefing generation
                 ex.pop("text", None)
-
-                # spreadsheet previews can balloon across many sheets/files
                 if isinstance(ex.get("sheets"), list):
                     for sh in ex["sheets"]:
                         if isinstance(sh, dict):
@@ -547,94 +548,101 @@ def home(request: Request):
 
 @app.post("/api/analyse")
 async def analyse(zip_file: list[UploadFile] = File(...)):
-    if not zip_file:
-        return JSONResponse({"error": "No files uploaded."}, status_code=400)
+    # IMPORTANT: top-level try so we never drop the connection without JSON
+    try:
+        if not zip_file:
+            return JSONResponse({"error": "No files uploaded."}, status_code=400)
 
-    max_bytes = 300 * 1024 * 1024
+        max_bytes = 300 * 1024 * 1024
 
-    sections: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    ext_counter: Counter[str] = Counter()
+        sections: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        ext_counter: Counter[str] = Counter()
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        extract_dir = tmp_path / "unzipped"
-        extract_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            extract_dir = tmp_path / "unzipped"
+            extract_dir.mkdir(parents=True, exist_ok=True)
 
-        uploaded_names: list[str] = []
-        scanned_paths: list[tuple[Path, str]] = []
+            uploaded_names: list[str] = []
+            scanned_paths: list[tuple[Path, str]] = []
 
-        # 1) ingest: save uploads, unzip zips
-        for uf in zip_file:
-            if not uf.filename:
-                continue
-            uploaded_names.append(uf.filename)
+            # 1) ingest: save uploads, unzip zips
+            for uf in zip_file:
+                if not uf.filename:
+                    continue
+                uploaded_names.append(uf.filename)
 
-            content = await uf.read()
-            if len(content) > max_bytes:
-                return JSONResponse({"error": f"File too large (limit 300MB): {uf.filename}"}, status_code=400)
+                content = await uf.read()
+                if len(content) > max_bytes:
+                    return JSONResponse({"error": f"File too large (limit 300MB): {uf.filename}"}, status_code=400)
 
-            if uf.filename.lower().endswith(".zip"):
-                zp = tmp_path / f"upload_{len(uploaded_names)}.zip"
-                zp.write_bytes(content)
-                try:
-                    extracted = safe_extract_zip(zp, extract_dir, max_files=5000)
-                except Exception as e:
-                    return JSONResponse({"error": f"Could not extract ZIP {uf.filename}: {e}"}, status_code=400)
+                if uf.filename.lower().endswith(".zip"):
+                    zp = tmp_path / f"upload_{len(uploaded_names)}.zip"
+                    zp.write_bytes(content)
+                    try:
+                        extracted = safe_extract_zip(zp, extract_dir, max_files=5000)
+                    except Exception as e:
+                        return JSONResponse({"error": f"Could not extract ZIP {uf.filename}: {e}"}, status_code=400)
 
-                for p in extracted:
-                    scanned_paths.append((p, str(p.relative_to(extract_dir))))
-            else:
-                safe_name = Path(uf.filename).name
-                op = tmp_path / safe_name
-                op.write_bytes(content)
-                scanned_paths.append((op, safe_name))
+                    for p in extracted:
+                        scanned_paths.append((p, str(p.relative_to(extract_dir))))
+                else:
+                    safe_name = Path(uf.filename).name
+                    op = tmp_path / safe_name
+                    op.write_bytes(content)
+                    scanned_paths.append((op, safe_name))
 
-        # 2) classify + extract
-        total_files = 0
-        by_category_count: dict[str, int] = defaultdict(int)
+            # 2) classify + extract (guard: cap total processed files)
+            total_files = 0
+            by_category_count: dict[str, int] = defaultdict(int)
 
-        for p, display in scanned_paths:
-            total_files += 1
-            ext = p.suffix.lower() if p.suffix else "(no_ext)"
-            ext_counter[ext] += 1
+            MAX_FILES_TO_PROCESS = 1200
+            for p, display in scanned_paths[:MAX_FILES_TO_PROCESS]:
+                total_files += 1
+                ext = p.suffix.lower() if p.suffix else "(no_ext)"
+                ext_counter[ext] += 1
 
-            category = classify_file(p)
-            by_category_count[category] += 1
+                category = classify_file(p)
+                by_category_count[category] += 1
 
-            extracted = extract_by_type(p, category)
-            sections[category].append({
-                "file": display,
-                "ext": ext,
-                "category": category,
-                "extracted": extracted,
-            })
+                extracted = extract_by_type(p, category)
+                sections[category].append({
+                    "file": display,
+                    "ext": ext,
+                    "category": category,
+                    "extracted": extracted,
+                })
 
-        def has_cat(cat: str) -> bool:
-            return len(sections.get(cat, [])) > 0
+            def has_cat(cat: str) -> bool:
+                return len(sections.get(cat, [])) > 0
 
-        # 3) estimator-grade briefing (uses internal 'text' blobs)
-        briefing = extract_pack_briefing(sections)
+            # 3) estimator-grade briefing (uses internal 'text' blobs)
+            briefing = extract_pack_briefing(sections)
 
-        # 4) FIX: keep response small so fetch doesn't fail
-        _strip_internal_fields(sections)
+            # 4) strip internal heavy fields BEFORE responding
+            _strip_internal_fields(sections)
 
-        report = {
-            "summary": {
-                "uploaded_items": len(uploaded_names),
-                "uploaded_names": uploaded_names[:200],
-                "total_files_scanned": total_files,
-                "by_extension": dict(ext_counter.most_common()),
-                "by_category": dict(sorted(by_category_count.items(), key=lambda x: x[1], reverse=True)),
-                "boq_found": has_cat("boq"),
-                "register_found": has_cat("registers"),
-                "drawings_found": has_cat("drawings"),
-                "forms_found": has_cat("forms"),
-                "prelims_found": has_cat("prelims"),
-                "specs_found": has_cat("specs"),
-                "addenda_found": has_cat("addenda"),
-            },
-            "briefing": briefing,
-            "sections": dict(sections),
-        }
+            report = {
+                "summary": {
+                    "uploaded_items": len(uploaded_names),
+                    "uploaded_names": uploaded_names[:200],
+                    "total_files_scanned": total_files,
+                    "by_extension": dict(ext_counter.most_common()),
+                    "by_category": dict(sorted(by_category_count.items(), key=lambda x: x[1], reverse=True)),
+                    "boq_found": has_cat("boq"),
+                    "register_found": has_cat("registers"),
+                    "drawings_found": has_cat("drawings"),
+                    "forms_found": has_cat("forms"),
+                    "prelims_found": has_cat("prelims"),
+                    "specs_found": has_cat("specs"),
+                    "addenda_found": has_cat("addenda"),
+                },
+                "briefing": briefing,
+                "sections": dict(sections),
+            }
 
-        return JSONResponse(report)
+            return JSONResponse(report)
+
+    except Exception as e:
+        # If ANYTHING blows up, return JSON instead of dropping the connection
+        return JSONResponse({"error": f"Analyse failed: {e}"}, status_code=500)
