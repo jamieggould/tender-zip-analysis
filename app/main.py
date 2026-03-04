@@ -133,6 +133,7 @@ def guess_drawing_number(filename: str) -> str | None:
 
 
 # ---------------- extraction helpers ----------------
+# Keep your original “mentions” behaviour, but the new briefing uses these as signals too.
 ESTIMATOR_KEYWORDS = [
     "asbestos", "soft strip", "strip out", "demolition", "temporary works", "propping",
     "party wall", "working hours", "out of hours", "noise", "dust", "vibration",
@@ -142,7 +143,6 @@ ESTIMATOR_KEYWORDS = [
     "site access", "hoarding", "scaffold", "crushing", "arising", "arisings",
 ]
 
-# “Things estimators MUST see” (bucketed + synonyms)
 RISK_BUCKETS: dict[str, list[str]] = {
     "Asbestos / hazardous materials": ["asbestos", "acm", "hazardous", "lead paint", "silica"],
     "Temporary works / propping": ["temporary works", "propping", "needling", "backpropping", "sequencing"],
@@ -161,14 +161,18 @@ DATE_PATTERNS = [
     r"\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b",
 ]
 
-# Key commercial clauses (regex + evidence capture)
+# Evidence patterns for the “1–2 page briefing” sections
 TENDER_RETURN_PATTERNS = [
-    r"(tender|return|submit|submission)\s+(date|deadline|by)\s*[:\-]?\s*(.+)",
-    r"(deadline)\s*[:\-]?\s*(.+)",
+    r"(tender|return|submit|submission)\s+(date|deadline|by)\s*[:\-]?\s*([^\n]{0,140})",
+    r"\b(deadline)\b\s*[:\-]?\s*([^\n]{0,140})",
+]
+SUBMISSION_PATTERNS = [
+    r"\b(submit|submission|return)\b.{0,120}\b(email|e-mail|portal|upload|address)\b.{0,120}",
+    r"\b(email)\b\s*[:\-]?\s*([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})",
 ]
 LD_PATTERNS = [
     r"(liquidated damages|LDs?|LADs?)\s*[:\-]?\s*(£\s?\d[\d,]*\.?\d*)",
-    r"(liquidated damages|LDs?|LADs?).{0,60}(£\s?\d[\d,]*\.?\d*)",
+    r"(liquidated damages|LDs?|LADs?).{0,80}(£\s?\d[\d,]*\.?\d*)",
 ]
 RETENTION_PATTERNS = [
     r"(retention)\s*[:\-]?\s*(\d{1,2}(\.\d+)?\s*%)",
@@ -179,15 +183,20 @@ PROGRAMME_PATTERNS = [
     r"(\d{1,3})\s*(weeks?|months?)\s*(programme|duration|contract period)",
 ]
 WORKING_HOURS_PATTERNS = [
-    r"(working hours|site hours|hours of work)\s*[:\-]?\s*(.+)",
-    r"(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?).{0,40}(\d{1,2}[:.]\d{2}).{0,10}(\d{1,2}[:.]\d{2})",
+    r"(working hours|site hours|hours of work)\s*[:\-]?\s*([^\n]{0,160})",
+    r"(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?).{0,50}(\d{1,2}[:.]\d{2}).{0,20}(\d{1,2}[:.]\d{2})",
 ]
-CONTRACT_HINTS = [
-    ("JCT", ["jct"]),
-    ("NEC", ["nec", "nec3", "nec4"]),
-    ("ICC", ["infrastructure conditions of contract", "icc"]),
-    ("FIDIC", ["fidic"]),
+INSURANCE_PATTERNS = [
+    r"\b(public liability|employers liability|EL|PL)\b.{0,80}(£\s?\d[\d,]*\.?\d*)",
+    r"\b(insurance)\b.{0,120}(£\s?\d[\d,]*\.?\d*)",
 ]
+ACCREDITATION_PATTERNS = [
+    r"\b(CHAS|SMAS|SafeContractor|Constructionline|ISO\s?9001|ISO\s?14001|ISO\s?45001)\b.{0,120}",
+]
+
+# “Requirements” extraction (strict vs loose)
+REQ_STRICT_RE = re.compile(r"\b(must|shall|required|mandatory|as a minimum|minimum of|no later than)\b", re.I)
+REQ_LOOSE_RE = re.compile(r"\b(should|please|requested|provide|submit|include|confirm)\b", re.I)
 
 
 def _clean_text(s: str) -> str:
@@ -197,46 +206,73 @@ def _clean_text(s: str) -> str:
     return s.strip()
 
 
-def _snip_context(text: str, idx: int, window: int = 120) -> str:
+def _snip_context(text: str, idx: int, window: int = 140) -> str:
     start = max(0, idx - window)
     end = min(len(text), idx + window)
     snippet = text[start:end]
     snippet = re.sub(r"\s+", " ", snippet).strip()
-    return snippet[:260]
+    return snippet[:300]
 
 
-def _find_evidence(text: str, patterns: list[str], max_items: int = 5) -> list[dict[str, str]]:
-    """
-    Returns list of {match: ..., evidence: ...}
-    """
+def _find_evidence(text: str, patterns: list[str], max_items: int = 6) -> list[dict[str, str]]:
     found: list[dict[str, str]] = []
-    t = text
-
     for pat in patterns:
-        for m in re.finditer(pat, t, flags=re.IGNORECASE):
+        for m in re.finditer(pat, text, flags=re.IGNORECASE):
             raw = m.group(0).strip()
-            ev = _snip_context(t, m.start())
-            found.append({"match": raw[:180], "evidence": ev})
+            found.append({"match": raw[:220], "evidence": _snip_context(text, m.start())})
             if len(found) >= max_items:
                 return found
-
     return found
 
 
-def _guess_contract_type(text: str) -> str | None:
-    tl = text.lower()
-    for label, needles in CONTRACT_HINTS:
-        if any(n in tl for n in needles):
-            return label
-    return None
+def _extract_requirements(text: str, max_lines: int = 40) -> dict[str, list[str]]:
+    """
+    Returns:
+      - strict: MUST/SHALL/REQUIRED style lines
+      - loose: SHOULD/PLEASE/REQUESTED etc lines
+    """
+    strict: list[str] = []
+    loose: list[str] = []
+
+    # Split into rough “lines” but keep long lines under control
+    lines = [l.strip() for l in re.split(r"[\r\n]+", text) if l and l.strip()]
+    for l in lines:
+        if len(l) < 6:
+            continue
+        ll = l[:420]
+        if REQ_STRICT_RE.search(ll):
+            strict.append(ll)
+        elif REQ_LOOSE_RE.search(ll):
+            loose.append(ll)
+        if len(strict) >= max_lines and len(loose) >= max_lines:
+            break
+
+    # De-dupe while preserving order
+    def dedup(items: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for x in items:
+            k = x.lower()
+            if k not in seen:
+                seen.add(k)
+                out.append(x)
+        return out
+
+    return {"strict": dedup(strict)[:max_lines], "loose": dedup(loose)[:max_lines]}
 
 
 def extract_pdf_info(path: Path, max_pages: int = 20) -> dict[str, Any]:
     """
-    Reads more pages than before (20) to catch commercial clauses often buried.
-    Still caps output size to stay safe on big packs.
+    Key change: we keep a capped 'text' field for pack-wide briefing.
+    Still safe (page cap + text cap).
     """
-    info: dict[str, Any] = {"pages": None, "keyword_hits": {}, "date_candidates": [], "snippet": "", "text_len": 0}
+    info: dict[str, Any] = {
+        "pages": None,
+        "keyword_hits": {},
+        "date_candidates": [],
+        "snippet": "",
+        "text_len": 0,
+    }
 
     try:
         reader = PdfReader(str(path))
@@ -250,8 +286,8 @@ def extract_pdf_info(path: Path, max_pages: int = 20) -> dict[str, Any]:
 
         text = _clean_text("\n".join(text_parts))
         info["text_len"] = len(text)
-        text_lc = text.lower()
 
+        text_lc = text.lower()
         hits: dict[str, int] = {}
         for kw in ESTIMATOR_KEYWORDS:
             if kw in text_lc:
@@ -262,12 +298,13 @@ def extract_pdf_info(path: Path, max_pages: int = 20) -> dict[str, Any]:
         for pat in DATE_PATTERNS:
             for m in re.finditer(pat, text, flags=re.IGNORECASE):
                 dates.add(m.group(1))
-        info["date_candidates"] = sorted(dates)[:25]
+        info["date_candidates"] = sorted(dates)[:30]
 
         info["snippet"] = text[:1600]
+        info["text"] = text[:25000]  # <-- used for pack briefing
 
-        # NEW: keep a capped text field for pack-wide aggregation
-        info["text"] = text[:25000]
+        # Requirements extraction (strict/loose)
+        info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
         info["error"] = f"PDF read failed: {e}"
@@ -275,33 +312,30 @@ def extract_pdf_info(path: Path, max_pages: int = 20) -> dict[str, Any]:
     return info
 
 
-def extract_docx_info(path: Path, max_paras: int = 400) -> dict[str, Any]:
+def extract_docx_info(path: Path, max_paras: int = 500) -> dict[str, Any]:
     """
-    Improved: includes table text (lots of prelims/specs are tables).
+    Key change: includes table text (prelims/specs often live in tables).
+    Also keeps capped 'text' for pack-wide briefing.
     """
     info: dict[str, Any] = {"headings": [], "keyword_hits": {}, "snippet": "", "text_len": 0}
 
     try:
         doc = Document(str(path))
 
-        # Paragraph text
         paras = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
         paras = paras[:max_paras]
 
-        # Table text (important!)
         table_lines: list[str] = []
-        for table in doc.tables[:40]:
-            for row in table.rows[:200]:
+        for table in doc.tables[:60]:
+            for row in table.rows[:250]:
                 cells = [c.text.strip() for c in row.cells if c.text and c.text.strip()]
                 if cells:
-                    table_lines.append(" | ".join(cells)[:300])
+                    table_lines.append(" | ".join(cells)[:420])
 
         text = _clean_text("\n".join(paras + table_lines))
         info["text_len"] = len(text)
-        text_lc = text.lower()
 
-        # headings
-        headings = []
+        headings: list[str] = []
         for p in doc.paragraphs:
             if p.style and p.style.name and "Heading" in p.style.name and p.text.strip():
                 headings.append(p.text.strip())
@@ -309,6 +343,7 @@ def extract_docx_info(path: Path, max_paras: int = 400) -> dict[str, Any]:
                 break
         info["headings"] = headings
 
+        text_lc = text.lower()
         hits: dict[str, int] = {}
         for kw in ESTIMATOR_KEYWORDS:
             if kw in text_lc:
@@ -316,9 +351,10 @@ def extract_docx_info(path: Path, max_paras: int = 400) -> dict[str, Any]:
         info["keyword_hits"] = dict(sorted(hits.items(), key=lambda x: x[1], reverse=True)[:25])
 
         info["snippet"] = text[:1600]
+        info["text"] = text[:25000]  # <-- used for pack briefing
 
-        # NEW: keep a capped text field for pack-wide aggregation
-        info["text"] = text[:25000]
+        # Requirements extraction (strict/loose)
+        info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
         info["error"] = f"DOCX read failed: {e}"
@@ -347,12 +383,6 @@ def detect_boq_columns(header_row: list[str]) -> dict[str, int]:
 
 
 def extract_xlsx_info(path: Path) -> dict[str, Any]:
-    """
-    Still lightweight, but now attempts:
-      - detect likely BOQ sheets
-      - list units seen in preview
-      - show a few “description-ish” lines for estimator context
-    """
     info: dict[str, Any] = {"sheets": []}
 
     try:
@@ -363,59 +393,14 @@ def extract_xlsx_info(path: Path) -> dict[str, Any]:
             for r in ws.iter_rows(min_row=1, max_row=60, values_only=True):
                 rows.append([("" if v is None else str(v)).strip() for v in r][:40])
 
-            header = None
-            header_idx = None
-            for i, r in enumerate(rows):
-                non_empty = sum(1 for x in r if x)
-                if non_empty >= 3:
-                    header = r
-                    header_idx = i
-                    break
-
+            header = rows[0] if rows else []
             colmap = detect_boq_columns(header) if header else {}
-
-            # BOQ confidence: if we can map description + qty (and ideally unit)
-            boq_conf = 0
-            if "description" in colmap:
-                boq_conf += 1
-            if "qty" in colmap:
-                boq_conf += 1
-            if "unit" in colmap:
-                boq_conf += 1
-
-            # pull units + sample descriptions from preview
-            units: Counter[str] = Counter()
-            sample_desc: list[str] = []
-            if header_idx is not None and colmap:
-                desc_i = colmap.get("description", -1)
-                unit_i = colmap.get("unit", -1)
-
-                for r in rows[header_idx + 1 : header_idx + 40]:
-                    if unit_i != -1 and unit_i < len(r):
-                        u = (r[unit_i] or "").strip()
-                        if u and len(u) <= 10:
-                            units[u] += 1
-
-                    if desc_i != -1 and desc_i < len(r):
-                        d = (r[desc_i] or "").strip()
-                        if d and len(d) > 8:
-                            sample_desc.append(d[:120])
-
-            approx_lines = 0
-            if header_idx is not None:
-                for r in rows[header_idx + 1:]:
-                    if any(x for x in r):
-                        approx_lines += 1
 
             info["sheets"].append({
                 "name": name,
-                "header_guess": header[:12] if header else [],
+                "header_guess": header[:20],
                 "boq_column_map": colmap,
-                "boq_confidence": boq_conf,  # 0-3
-                "approx_lines_in_preview": approx_lines,
-                "units_in_preview": dict(units.most_common(12)),
-                "sample_descriptions": sample_desc[:10],
-                "preview_rows": rows[header_idx:header_idx+6] if header_idx is not None else rows[:6],
+                "preview_rows": rows[:10],
             })
 
     except Exception as e:
@@ -449,7 +434,7 @@ def extract_by_type(path: Path, category: str) -> dict[str, Any]:
     ext = path.suffix.lower()
     if ext == ".pdf":
         return extract_pdf_info(path)
-    if ext in [".docx"]:
+    if ext == ".docx":
         return extract_docx_info(path)
     if ext in [".xlsx", ".xls"]:
         return extract_xlsx_info(path)
@@ -465,54 +450,55 @@ def extract_by_type(path: Path, category: str) -> dict[str, Any]:
     return {}
 
 
-# ---------------- NEW: pack-wide tender briefing extraction ----------------
+# ---------------- NEW: pack-wide estimator briefing ----------------
 def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     """
-    Aggregates extracted text across PDFs/DOCXs and pulls out:
-      - tender return / deadline candidates
-      - LD / LAD candidates
-      - working hours
-      - programme duration
-      - retention
-      - contract type guess
-      - risk buckets with evidence
+    Builds the “read 1–2 pages instead of 60” output:
+      - Key Dates / Tender Return candidates
+      - Submission route (email/portal hints)
+      - Commercials (LD, retention, programme, working hours)
+      - Insurance / accreditations signals
+      - Risk buckets with evidence
+      - Requirements (strict vs loose) aggregated pack-wide
     """
-    # Collect text from “wordy” sections only
-    text_sources: list[tuple[str, str]] = []  # (file, text)
+    # Collect text from “wordy” categories (where the tender rules live)
+    text_blobs: list[str] = []
+    strict_reqs: list[str] = []
+    loose_reqs: list[str] = []
+
     for cat in ["prelims", "specs", "forms", "addenda", "documents", "pdfs"]:
         for item in sections.get(cat, []):
             ex = item.get("extracted") or {}
             t = ex.get("text")
             if t and isinstance(t, str) and t.strip():
-                text_sources.append((item.get("file", ""), t))
+                text_blobs.append(t)
 
-    # Merge but cap to avoid massive memory use
-    merged = "\n\n".join([t for _, t in text_sources])
-    merged = merged[:200000]  # hard cap
+            req = ex.get("requirements") or {}
+            for s in req.get("strict", []) or []:
+                strict_reqs.append(s)
+            for s in req.get("loose", []) or []:
+                loose_reqs.append(s)
 
-    # Contract type (best effort)
-    contract = _guess_contract_type(merged)
-
-    # Commercial clauses with evidence
-    tender_return = _find_evidence(merged, TENDER_RETURN_PATTERNS, max_items=6)
-    ld = _find_evidence(merged, LD_PATTERNS, max_items=6)
-    retention = _find_evidence(merged, RETENTION_PATTERNS, max_items=6)
-    programme = _find_evidence(merged, PROGRAMME_PATTERNS, max_items=6)
-    working_hours = _find_evidence(merged, WORKING_HOURS_PATTERNS, max_items=6)
-
-    # Risk buckets (counts + evidence per bucket)
+    merged = "\n\n".join(text_blobs)[:200000]
     merged_lc = merged.lower()
+
+    tender_return = _find_evidence(merged, TENDER_RETURN_PATTERNS, max_items=8)
+    submission = _find_evidence(merged, SUBMISSION_PATTERNS, max_items=8)
+    ld = _find_evidence(merged, LD_PATTERNS, max_items=8)
+    retention = _find_evidence(merged, RETENTION_PATTERNS, max_items=8)
+    programme = _find_evidence(merged, PROGRAMME_PATTERNS, max_items=8)
+    working_hours = _find_evidence(merged, WORKING_HOURS_PATTERNS, max_items=8)
+    insurance = _find_evidence(merged, INSURANCE_PATTERNS, max_items=8)
+    accreditations = _find_evidence(merged, ACCREDITATION_PATTERNS, max_items=10)
+
     risks: dict[str, Any] = {}
     for bucket, needles in RISK_BUCKETS.items():
         count = 0
         evidence: list[str] = []
         for needle in needles:
             if needle in merged_lc:
-                # count occurrences (rough)
-                c = merged_lc.count(needle)
-                count += c
-
-                # capture up to 2 evidence snippets per needle
+                count += merged_lc.count(needle)
+                # capture up to 2 snippets per needle
                 start = 0
                 for _ in range(2):
                     idx = merged_lc.find(needle, start)
@@ -520,33 +506,53 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
                         break
                     evidence.append(_snip_context(merged, idx))
                     start = idx + len(needle)
-
         if count > 0:
             # de-dup evidence
             dedup: list[str] = []
+            seen: set[str] = set()
             for e in evidence:
-                if e not in dedup:
+                k = e.lower()
+                if k not in seen:
+                    seen.add(k)
                     dedup.append(e)
             risks[bucket] = {"mentions": count, "evidence": dedup[:6]}
 
-    # Dates already detected per doc: flatten unique list
+    # Dates detected per-doc: flatten
     date_candidates: set[str] = set()
-    for cat, items in sections.items():
+    for _, items in sections.items():
         for it in items:
             ex = it.get("extracted") or {}
             for d in ex.get("date_candidates", []) or []:
                 date_candidates.add(str(d))
 
+    # De-dupe requirements (pack-wide)
+    def dedup_list(items: list[str], limit: int) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for x in items:
+            k = x.strip().lower()
+            if not k or k in seen:
+                continue
+            seen.add(k)
+            out.append(x.strip())
+            if len(out) >= limit:
+                break
+        return out
+
     return {
-        "contract_type_guess": contract,
         "date_candidates": sorted(date_candidates)[:40],
         "tender_return_candidates": tender_return,
+        "submission_candidates": submission,
         "liquidated_damages_candidates": ld,
         "retention_candidates": retention,
         "programme_candidates": programme,
         "working_hours_candidates": working_hours,
+        "insurance_candidates": insurance,
+        "accreditations_candidates": accreditations,
         "risk_buckets": risks,
-        "sources_scanned": len(text_sources),
+        "requirements_strict": dedup_list(strict_reqs, 60),
+        "requirements_loose": dedup_list(loose_reqs, 60),
+        "sources_scanned": len(text_blobs),
     }
 
 
@@ -623,7 +629,7 @@ async def analyse(zip_file: list[UploadFile] = File(...)):
         def has_cat(cat: str) -> bool:
             return len(sections.get(cat, [])) > 0
 
-        # 3) NEW: pack-wide briefing
+        # 3) NEW: estimator-grade briefing (the “1–2 page read”)
         briefing = extract_pack_briefing(sections)
 
         report = {
@@ -641,8 +647,8 @@ async def analyse(zip_file: list[UploadFile] = File(...)):
                 "specs_found": has_cat("specs"),
                 "addenda_found": has_cat("addenda"),
             },
-            "briefing": briefing,   # <--- THIS is the estimator-grade output
-            "sections": sections,
+            "briefing": briefing,           # <-- use this in your UI instead of “water mentioned 28 times”
+            "sections": dict(sections),     # <-- IMPORTANT: convert defaultdict -> dict for JSON serialization
         }
 
         return JSONResponse(report)
