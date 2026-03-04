@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import re
 import csv
 import shutil
@@ -142,7 +141,7 @@ ESTIMATOR_KEYWORDS = [
     "site access", "hoarding", "scaffold", "crushing", "arising", "arisings",
 ]
 
-# CHANGED (minimises false positives vs generic specs/BREEAM guidance)
+# (kept as you pasted)
 RISK_BUCKETS: dict[str, list[str]] = {
     "Asbestos / hazardous materials": ["asbestos", "acm", "hazardous", "lead paint", "silica"],
     "Temporary works / propping": ["temporary works", "propping", "needling", "backpropping", "sequencing"],
@@ -198,7 +197,6 @@ REQ_LOOSE_RE = re.compile(r"\b(should|please|requested|provide|submit|include|co
 
 SENT_SPLIT_RE = re.compile(r"(?<=[\.\!\?])\s+|\n+")
 
-# NEW: filters to stop “random spec guidance” polluting the briefing
 TENDER_CONTEXT_WORDS = [
     "tender", "return", "submit", "submission", "deadline", "closing date",
     "contract", "conditions", "jct", "nec", "scope", "works", "employer",
@@ -215,7 +213,7 @@ IRRELEVANT_DOC_HINTS = [
 
 
 def _clean_text(s: str) -> str:
-    s = s.replace("\x00", " ")
+    s = (s or "").replace("\x00", " ")
     s = re.sub(r"[ \t]+", " ", s)
     s = re.sub(r"\n{3,}", "\n\n", s)
     return s.strip()
@@ -289,11 +287,9 @@ def _is_tender_relevant_sentence(s: str) -> bool:
 def _split_sentences(text: str) -> list[str]:
     if not text:
         return []
-    parts = [p.strip() for p in SENT_SPLIT_RE.split(text) if p and p.strip()]
-    return parts
+    return [p.strip() for p in SENT_SPLIT_RE.split(text) if p and p.strip()]
 
 
-# CHANGED: only keep requirements that are actually tender/submission relevant
 def _extract_requirements(text: str, max_lines: int = 40) -> dict[str, list[str]]:
     strict: list[str] = []
     loose: list[str] = []
@@ -321,7 +317,6 @@ def _extract_requirements(text: str, max_lines: int = 40) -> dict[str, list[str]
         if len(strict) >= max_lines and len(loose) >= max_lines:
             break
 
-    # sentence fallback if PDFs don’t preserve line breaks well
     if len(strict) < 6:
         for s in _split_sentences(text):
             ss = s[:420]
@@ -351,12 +346,10 @@ def _extract_requirements(text: str, max_lines: int = 40) -> dict[str, list[str]
 def _best_line_from_evidence(items: list[dict[str, str]] | None) -> str | None:
     if not items:
         return None
-    # prefer tender-relevant matches
     for it in items:
         m = _normalize_line(it.get("match") or "")
         if m and _is_tender_relevant_sentence(m):
             return m[:240]
-    # fallback to non-gibberish
     for it in items:
         m = _normalize_line(it.get("match") or "")
         if m and not _is_gibberish_line(m):
@@ -398,10 +391,6 @@ def _sentences_around(text: str, idx: int, max_sentences: int = 2) -> str:
 
 
 def _find_bucket_evidence(merged: str, needle: str, bucket: str, max_items: int = 1) -> list[str]:
-    """
-    Finds a short, readable tender-relevant sentence for a bucket.
-    Extra guard: Services bucket must include isolation/live/disconnect-ish words.
-    """
     merged_lc = merged.lower()
     out: list[str] = []
     start = 0
@@ -606,19 +595,16 @@ def extract_by_type(path: Path, category: str) -> dict[str, Any]:
     return {}
 
 
-# CHANGED: builds an actual usable summary (headline facts + clean constraints + missing list)
 def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     text_blobs: list[str] = []
     strict_reqs: list[str] = []
     loose_reqs: list[str] = []
 
-    # prefer where tender rules usually are; still include pdfs but filter later
     for cat in ["forms", "prelims", "addenda", "specs", "documents", "pdfs"]:
         for item in sections.get(cat, []):
             ex = item.get("extracted") or {}
             t = ex.get("text")
             if t and isinstance(t, str) and t.strip():
-                # drop obviously irrelevant blobs early (stops BREEAM guidance etc)
                 if _looks_irrelevant(t[:900]):
                     continue
                 text_blobs.append(t)
@@ -639,7 +625,6 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
     insurance = _find_evidence(merged, INSURANCE_PATTERNS, max_items=10)
     accreditations = _find_evidence(merged, ACCREDITATION_PATTERNS, max_items=12)
 
-    # flatten dates from per-doc extraction
     date_candidates: set[str] = set()
     for _, items in sections.items():
         for it in items:
@@ -647,7 +632,6 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
             for d in ex.get("date_candidates", []) or []:
                 date_candidates.add(str(d))
 
-    # requirements: keep only tender-relevant lines (already filtered in extractor)
     def dedup_clean(items: list[str], limit: int) -> list[str]:
         out: list[str] = []
         seen: set[str] = set()
@@ -669,7 +653,6 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
     strict_clean = dedup_clean(strict_reqs, 18)
     loose_clean = dedup_clean(loose_reqs, 18)
 
-    # constraints: one good sentence per bucket (no massive blobs)
     constraints: list[str] = []
     for bucket, needles in RISK_BUCKETS.items():
         if not any(n in merged_lc for n in needles):
@@ -737,7 +720,7 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
 
     executive_summary = "\n".join(lines)
 
-    acc_short = []
+    acc_short: list[str] = []
     for x in (accreditations or [])[:12]:
         m = _normalize_line(x.get("match") or "")
         if m and _is_tender_relevant_sentence(m):
@@ -763,7 +746,6 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
         "requirements_loose": loose_clean,
         "missing": missing,
         "sources_scanned": len(text_blobs),
-        # keep evidence for debugging / future UI toggles
         "evidence": {
             "tender_return_candidates": tender_return[:6],
             "submission_candidates": submission[:6],
@@ -797,6 +779,15 @@ def home(request: Request):
 
 @app.post("/api/analyse")
 async def analyse(zip_file: list[UploadFile] = File(...)):
+    """
+    Accepts:
+      - one or more .zip files (will be extracted)
+      - OR many individual files (including folder uploads where uf.filename contains subfolders)
+
+    Key fix:
+      - the previous deploy failed due to indentation / broken if/else.
+      - this keeps folder structure safely (no traversal).
+    """
     try:
         if not zip_file:
             return JSONResponse({"error": "No files uploaded."}, status_code=400)
@@ -818,36 +809,49 @@ async def analyse(zip_file: list[UploadFile] = File(...)):
             for uf in zip_file:
                 if not uf.filename:
                     continue
+
                 uploaded_names.append(uf.filename)
 
                 content = await uf.read()
                 if len(content) > max_bytes:
-                    return JSONResponse({"error": f"File too large (limit 300MB): {uf.filename}"}, status_code=400)
+                    return JSONResponse(
+                        {"error": f"File too large (limit 300MB): {uf.filename}"},
+                        status_code=400,
+                    )
 
-               if uf.filename.lower().endswith(".zip"):
-    zp = tmp_path / f"upload_{len(uploaded_names)}.zip"
-    zp.write_bytes(content)
-    try:
-        extracted = safe_extract_zip(zp, extract_dir, max_files=5000)
-    except Exception as e:
-        return JSONResponse({"error": f"Could not extract ZIP {uf.filename}: {e}"}, status_code=400)
+                # ZIP upload
+                if uf.filename.lower().endswith(".zip"):
+                    zp = tmp_path / f"upload_{len(uploaded_names)}.zip"
+                    zp.write_bytes(content)
+                    try:
+                        extracted = safe_extract_zip(zp, extract_dir, max_files=5000)
+                    except Exception as e:
+                        return JSONResponse(
+                            {"error": f"Could not extract ZIP {uf.filename}: {e}"},
+                            status_code=400,
+                        )
 
-    for p in extracted:
-        scanned_paths.append((p, str(p.relative_to(extract_dir))))
+                    for p in extracted:
+                        scanned_paths.append((p, str(p.relative_to(extract_dir))))
 
-              else:
-    # Preserve folder structure if the browser provides it (folder upload)
-    rel = (uf.filename or "").replace("\\", "/").lstrip("/")
+                # Non-zip (including folder upload with subfolders in filename)
+                else:
+                    # uf.filename may contain relative subfolders when using folder upload
+                    rel = (uf.filename or "").replace("\\", "/").lstrip("/")
 
-    # prevent traversal + remove empty/. /.. segments
-    rel_path = Path(rel)
-    safe_rel = Path(*[p for p in rel_path.parts if p not in ("", ".", "..")])
+                    # prevent traversal + remove empty/. /.. segments
+                    rel_path = Path(rel)
+                    safe_rel = Path(*[p for p in rel_path.parts if p not in ("", ".", "..")])
 
-    op = tmp_path / safe_rel
-    op.parent.mkdir(parents=True, exist_ok=True)
-    op.write_bytes(content)
+                    # if the browser gives an empty-ish name, fall back
+                    if str(safe_rel) in ("", "."):
+                        safe_rel = Path(Path(uf.filename).name)
 
-    scanned_paths.append((op, str(safe_rel)))
+                    op = tmp_path / safe_rel
+                    op.parent.mkdir(parents=True, exist_ok=True)
+                    op.write_bytes(content)
+
+                    scanned_paths.append((op, str(safe_rel)))
 
             # 2) classify + extract (guard: cap total processed files)
             total_files = 0
@@ -873,7 +877,7 @@ async def analyse(zip_file: list[UploadFile] = File(...)):
             def has_cat(cat: str) -> bool:
                 return len(sections.get(cat, [])) > 0
 
-            # 3) briefing (returns executive_summary/constraints/missing)
+            # 3) briefing
             briefing = extract_pack_briefing(sections)
 
             # 4) strip internal heavy fields BEFORE responding
