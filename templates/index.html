@@ -4,31 +4,402 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Tender ZIP Analyser</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+
+  <!-- Optional: nicer font (safe to remove if you want zero externals) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    :root{
+      --bg0:#f6f7fb;
+      --bg1:#ffffff;
+      --card: rgba(255,255,255,0.92);
+      --card2: rgba(255,255,255,0.98);
+      --border: rgba(15,23,42,0.10);
+      --text: rgba(15,23,42,0.92);
+      --muted: rgba(15,23,42,0.58);
+
+      --shadow: 0 20px 50px rgba(2,6,23,0.08);
+      --shadow2: 0 10px 24px rgba(2,6,23,0.08);
+
+      --primaryA:#4f46e5; /* indigo */
+      --primaryB:#7c3aed; /* violet */
+      --primarySoft: rgba(99,102,241,0.14);
+
+      --success:#16a34a;
+      --warn:#f59e0b;
+
+      --radius: 18px;
+      --radius2: 14px;
+    }
+
+    *{ box-sizing:border-box; }
+    html,body{ height:100%; }
+    body{
+      margin:0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      color:var(--text);
+      background:
+        radial-gradient(1200px 800px at 18% 20%, rgba(124,58,237,0.10) 0%, rgba(124,58,237,0.00) 60%),
+        radial-gradient(1200px 800px at 80% 18%, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.00) 58%),
+        radial-gradient(1100px 700px at 70% 80%, rgba(59,130,246,0.08) 0%, rgba(59,130,246,0.00) 60%),
+        linear-gradient(180deg, var(--bg0) 0%, var(--bg1) 60%, var(--bg1) 100%);
+    }
+
+    .wrap{
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 34px 18px 60px;
+    }
+
+    /* Header */
+    .top{
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:14px;
+      padding: 18px 0 26px;
+    }
+    .brand{
+      display:flex;
+      align-items:center;
+      gap:14px;
+      user-select:none;
+    }
+    .logo{
+      width:46px;
+      height:46px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, rgba(79,70,229,0.18), rgba(124,58,237,0.12));
+      border: 1px solid rgba(79,70,229,0.18);
+      display:grid;
+      place-items:center;
+      box-shadow: var(--shadow2);
+      overflow:hidden;
+    }
+    .brand h1{
+      margin:0;
+      font-size: 28px;
+      letter-spacing: -0.02em;
+      font-weight: 800;
+    }
+    .brand p{
+      margin: 4px 0 0;
+      font-size: 14px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    /* Main shell */
+    .shell{
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      padding: 22px;
+    }
+
+    .grid{
+      display:grid;
+      grid-template-columns: 1.05fr 1.35fr;
+      gap: 18px;
+      align-items:start;
+    }
+
+    @media (max-width: 980px){
+      .grid{ grid-template-columns: 1fr; }
+    }
+
+    .panel{
+      background: var(--card2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 10px 24px rgba(2,6,23,0.06);
+      padding: 18px;
+    }
+    .panel h2{
+      margin:0 0 10px;
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+    }
+
+    /* Upload block */
+    .hint{
+      margin:0 0 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .upload{
+      border: 1px dashed rgba(15,23,42,0.18);
+      background: linear-gradient(180deg, rgba(255,255,255,0.8), rgba(255,255,255,0.6));
+      border-radius: var(--radius2);
+      padding: 14px;
+    }
+
+    .row{
+      display:flex;
+      gap: 10px;
+      align-items:center;
+      flex-wrap: wrap;
+    }
+
+    .file{
+      flex: 1 1 320px;
+      padding: 12px 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(15,23,42,0.12);
+      background: rgba(255,255,255,0.95);
+      outline: none;
+    }
+
+    .btn{
+      border: 0;
+      border-radius: 14px;
+      padding: 11px 14px;
+      cursor:pointer;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+      box-shadow: 0 10px 18px rgba(79,70,229,0.22);
+      background: linear-gradient(135deg, var(--primaryA), var(--primaryB));
+      color: white;
+      transition: transform .08s ease, filter .12s ease, opacity .12s ease;
+    }
+    .btn:active{ transform: translateY(1px); }
+    .btn:disabled{ opacity: 0.55; cursor:not-allowed; box-shadow:none; }
+
+    .btn.secondary{
+      background: rgba(255,255,255,0.95);
+      color: rgba(15,23,42,0.88);
+      border: 1px solid rgba(15,23,42,0.12);
+      box-shadow: none;
+    }
+
+    .status{
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      display:flex;
+      gap: 8px;
+      align-items:center;
+    }
+
+    .pill{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(79,70,229,0.10);
+      border: 1px solid rgba(79,70,229,0.16);
+      color: rgba(79,70,229,0.95);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .pill.ok{
+      background: rgba(22,163,74,0.10);
+      border-color: rgba(22,163,74,0.16);
+      color: rgba(22,163,74,0.92);
+    }
+    .pill.warn{
+      background: rgba(245,158,11,0.10);
+      border-color: rgba(245,158,11,0.18);
+      color: rgba(180,83,9,0.95);
+    }
+
+    .mini{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .mini .box{
+      border-radius: var(--radius2);
+      border: 1px solid rgba(15,23,42,0.10);
+      background: rgba(255,255,255,0.92);
+      padding: 12px;
+    }
+
+    .mini .box b{
+      display:block;
+      font-size: 12px;
+      margin-bottom: 6px;
+      color: rgba(15,23,42,0.84);
+    }
+    .mini .box span{
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    /* Result block */
+    .resultHead{
+      display:flex;
+      align-items:center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .pre{
+      margin:0;
+      border-radius: 16px;
+      border: 1px solid rgba(15,23,42,0.12);
+      background: linear-gradient(180deg, rgba(15,23,42,0.96), rgba(2,6,23,0.98));
+      color: rgba(226,232,240,0.92);
+      padding: 14px;
+      min-height: 320px;
+      max-height: 560px;
+      overflow:auto;
+      font-size: 12.5px;
+      line-height: 1.45;
+    }
+
+    .footer{
+      margin-top: 14px;
+      display:flex;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .kbd{
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 8px;
+      border: 1px solid rgba(15,23,42,0.12);
+      background: rgba(255,255,255,0.9);
+      color: rgba(15,23,42,0.80);
+    }
+  </style>
 </head>
+
 <body>
-  <main class="wrap">
-    <h1>Tender ZIP Analyser</h1>
-    <p class="sub">Upload a tender ZIP and get a quick breakdown (files, types, likely BOQ/register/addenda, basic drawing revision guesses).</p>
-
-    <section class="card">
-      <label class="label">Tender ZIP</label>
-      <input id="zip" type="file" accept=".zip" />
-      <div class="row">
-        <button id="btn" onclick="uploadZip()">Analyse</button>
-        <span id="status" class="status">Idle</span>
+  <div class="wrap">
+    <header class="top">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">
+          <!-- simple inline mark (replace with your real logo later if you want) -->
+          <svg width="34" height="34" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M32 6C20 6 10 16 10 28c0 14 14 28 22 30 8-2 22-16 22-30C54 16 44 6 32 6Z" fill="url(#g)"/>
+            <path d="M19 28c5 2 9 7 10 13" stroke="rgba(255,255,255,0.9)" stroke-width="5" stroke-linecap="round"/>
+            <path d="M45 24c-6 2-12 7-13 15" stroke="rgba(255,255,255,0.9)" stroke-width="5" stroke-linecap="round"/>
+            <defs>
+              <linearGradient id="g" x1="14" y1="14" x2="54" y2="54" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#4f46e5"/>
+                <stop offset="1" stop-color="#7c3aed"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <div>
+          <h1>Lawmens Tender Hub</h1>
+          <p>Upload a tender ZIP → get an instant pack breakdown</p>
+        </div>
       </div>
-    </section>
+    </header>
 
-    <section class="card">
-      <div class="row between">
-        <h2>Result</h2>
-        <button class="secondary" onclick="downloadJson()" id="downloadBtn" disabled>Download JSON</button>
+    <div class="shell">
+      <div class="grid">
+        <!-- LEFT: Upload / Guidance -->
+        <section class="panel">
+          <div class="row" style="justify-content:space-between;">
+            <h2>Upload</h2>
+            <span class="pill">Step 1</span>
+          </div>
+          <p class="hint">
+            Drop a tender pack ZIP and we’ll scan what’s inside: drawings, BOQ, registers, forms, addenda and more.
+            This is a lightweight “triage” tool — perfect for quickly seeing what you’ve actually been sent.
+          </p>
+
+          <div class="upload">
+            <div class="row">
+              <input id="zip" class="file" type="file" accept=".zip" />
+              <button id="btn" class="btn" onclick="uploadZip()">Analyse ZIP</button>
+            </div>
+
+            <div class="row" style="margin-top:10px; justify-content:space-between;">
+              <div class="status">
+                <span class="pill ok" id="statusPill" style="display:none;">Ready</span>
+                <span id="status">Idle</span>
+              </div>
+              <span class="pill warn">v1</span>
+            </div>
+          </div>
+
+          <div class="mini">
+            <div class="box">
+              <b>What you’ll get</b>
+              <span>
+                File counts by type, likely BOQ/register/addenda detection, and basic drawing number/revision guesses.
+              </span>
+            </div>
+            <div class="box">
+              <b>Tips</b>
+              <span>
+                If the pack is huge, keep it under ~300MB for now. For best results, make sure filenames include drawing numbers / revisions (e.g. A101 Rev P03).
+              </span>
+            </div>
+            <div class="box">
+              <b>Keyboard quick</b>
+              <span>
+                After upload: click <span class="kbd">Download JSON</span> to save the report and attach it to your enquiry / Monday item.
+              </span>
+            </div>
+          </div>
+        </section>
+
+        <!-- RIGHT: Result -->
+        <section class="panel">
+          <div class="resultHead">
+            <div class="row" style="gap:10px;">
+              <h2 style="margin:0;">Tender Pack Report</h2>
+              <span class="pill">Step 2</span>
+            </div>
+            <button class="btn secondary" onclick="downloadJson()" id="downloadBtn" disabled>Download JSON</button>
+          </div>
+
+          <pre id="out" class="pre">No result yet.</pre>
+
+          <div class="footer">
+            <span>
+              Status updates appear top-left. If you see an error, it’s usually a corrupted ZIP or a file limit being hit.
+            </span>
+            <span>
+              Endpoint: <span class="kbd">/api/analyse</span>
+            </span>
+          </div>
+        </section>
       </div>
-      <pre id="out">No result yet.</pre>
-    </section>
-  </main>
+    </div>
+  </div>
 
   <script src="/static/app.js"></script>
+
+  <!-- Small optional polish: sync a pill with status text without changing your backend -->
+  <script>
+    (function(){
+      const statusEl = document.getElementById("status");
+      const pill = document.getElementById("statusPill");
+      const obs = new MutationObserver(() => {
+        const t = (statusEl.textContent || "").toLowerCase();
+        pill.style.display = "inline-flex";
+        if (t.includes("done")) { pill.textContent = "Complete"; pill.className = "pill ok"; }
+        else if (t.includes("error")) { pill.textContent = "Error"; pill.className = "pill warn"; }
+        else if (t.includes("upload") || t.includes("analys")) { pill.textContent = "Working"; pill.className = "pill"; }
+        else { pill.textContent = "Ready"; pill.className = "pill ok"; }
+      });
+      obs.observe(statusEl, { childList: true, subtree: true });
+    })();
+  </script>
 </body>
 </html>
