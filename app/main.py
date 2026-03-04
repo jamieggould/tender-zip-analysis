@@ -834,21 +834,20 @@ async def analyse(zip_file: list[UploadFile] = File(...)):
 
                     for p in extracted:
                         scanned_paths.append((p, str(p.relative_to(extract_dir))))
-                else:
-                    
-                    # Preserve folder structure if the browser provides it (folder upload)
-# UploadFile.filename will be the relative path when using webkitdirectory
-rel = (uf.filename or "").replace("\\", "/").lstrip("/")
+                           else:
+                # Preserve folder structure if the browser provides it (folder upload)
+                # UploadFile.filename will be the relative path when using webkitdirectory
+                rel = (uf.filename or "").replace("\\", "/").lstrip("/")
 
-# prevent traversal + remove empty/. /.. segments
-rel_path = Path(rel)
-safe_rel = Path(*[p for p in rel_path.parts if p not in ("", ".", "..")])
+                # prevent traversal + remove empty/. /.. segments
+                rel_path = Path(rel)
+                safe_rel = Path(*[p for p in rel_path.parts if p not in ("", ".", "..")])
 
-op = tmp_path / safe_rel
-op.parent.mkdir(parents=True, exist_ok=True)
-op.write_bytes(content)
+                op = tmp_path / safe_rel
+                op.parent.mkdir(parents=True, exist_ok=True)
+                op.write_bytes(content)
 
-scanned_paths.append((op, str(safe_rel)))
+                scanned_paths.append((op, str(safe_rel)))
 
             # 2) classify + extract (guard: cap total processed files)
             total_files = 0
