@@ -191,16 +191,16 @@ margin-bottom:10px;
 margin:0;
 border-radius:16px;
 border:1px solid rgba(15,23,42,0.12);
-background:#ffffff;            /* changed from dark */
-color:#0f172a;                 /* black text */
+background:#ffffff;
+color:#0f172a;
 padding:20px;
 min-height:320px;
 max-height:560px;
 overflow:auto;
-font-size:14px;                /* easier to read */
+font-size:14px;
 line-height:1.7;
-font-family:Inter,system-ui;   /* removed monospace */
-white-space:pre-wrap;          /* keeps formatting */
+font-family:Inter,system-ui;
+white-space:pre-wrap;
 }
 
 /* ================================= */
@@ -222,6 +222,37 @@ border:1px solid rgba(15,23,42,0.12);
 background:white;
 }
 
+/* tiny helpers (non-invasive) */
+.pill{
+font-size:12px;
+padding:4px 10px;
+border-radius:999px;
+border:1px solid rgba(15,23,42,0.12);
+background:white;
+color:rgba(15,23,42,0.72);
+font-weight:800;
+}
+hr.sep{
+border:0;
+border-top:1px solid rgba(15,23,42,0.10);
+margin:14px 0;
+}
+.small{
+font-size:12px;
+color:var(--muted);
+}
+.badge{
+display:inline-block;
+padding:2px 8px;
+border:1px solid rgba(15,23,42,0.12);
+border-radius:999px;
+font-size:12px;
+font-weight:800;
+background:white;
+color:rgba(15,23,42,0.75);
+}
+.badge.ok{ border-color:rgba(22,163,74,0.30); color:rgba(22,163,74,0.90); }
+.badge.warn{ border-color:rgba(245,158,11,0.35); color:rgba(245,158,11,0.95); }
 </style>
 </head>
 
@@ -325,6 +356,7 @@ Upload files to generate a tender pack briefing.
 const input=document.getElementById("zip")
 const dz=document.getElementById("dropzone")
 const nameEl=document.getElementById("fileName")
+const out=document.getElementById("out")
 
 dz.onclick=()=>input.click()
 
@@ -349,6 +381,128 @@ dt.items.add(f)
 input.files=dt.files
 nameEl.textContent=input.files.length+" files selected"
 })
+
+/* -------- NEW: render the new briefing nicely (no backend changes needed) -------- */
+window.renderTenderReport = function(data){
+try{
+if(!data){
+out.textContent="No data returned."
+return
+}
+
+const s = data.summary || {}
+const b = data.briefing || {}
+
+function line(txt=""){ return txt + "\n" }
+
+function renderEvidenceList(items, title){
+let t = ""
+if(!items || !items.length) return ""
+t += line(title)
+for(const it of items){
+const m = (it.match || "").trim()
+const ev = (it.evidence || "").trim()
+if(m) t += line("• " + m)
+if(ev) t += line("  - " + ev)
+}
+t += line()
+return t
+}
+
+function renderReqList(items, title, max=18){
+if(!items || !items.length) return ""
+let t = ""
+t += line(title)
+const slice = items.slice(0, max)
+for(const r of slice){
+t += line("• " + r)
+}
+if(items.length > max){
+t += line("• … (" + (items.length - max) + " more)")
+}
+t += line()
+return t
+}
+
+function renderRiskBuckets(rb){
+if(!rb) return ""
+const keys = Object.keys(rb)
+if(!keys.length) return ""
+let t = ""
+t += line("KEY RISKS / CONSTRAINTS")
+for(const k of keys){
+const item = rb[k] || {}
+const mentions = item.mentions || 0
+t += line("• " + k + " — " + mentions + " mention" + (mentions===1?"":"s"))
+const evs = (item.evidence || []).slice(0,2)
+for(const ev of evs){
+t += line("  - " + ev)
+}
+}
+t += line()
+return t
+}
+
+function badge(ok){
+return ok ? "[FOUND]" : "[NOT FOUND]"
+}
+
+let text = ""
+text += line("TENDER PACK BRIEFING")
+text += line("--------------------------------------------------")
+text += line("FILES ANALYSED")
+text += line("• Total files: " + (s.total_files_scanned ?? 0))
+if(s.by_category){
+const cats = Object.entries(s.by_category).sort((a,b)=>b[1]-a[1]).slice(0,8)
+text += line("• Top categories: " + cats.map(([k,v])=>k+" ("+v+")").join(", "))
+}
+text += line()
+text += line("PACK CONTENT CHECK")
+text += line("• BOQ / Pricing: " + badge(!!s.boq_found))
+text += line("• Registers: " + badge(!!s.register_found))
+text += line("• Drawings: " + badge(!!s.drawings_found))
+text += line("• Forms: " + badge(!!s.forms_found))
+text += line("• Prelims: " + badge(!!s.prelims_found))
+text += line("• Specs: " + badge(!!s.specs_found))
+text += line("• Addenda: " + badge(!!s.addenda_found))
+text += line()
+
+if(b.date_candidates && b.date_candidates.length){
+text += line("DATES FOUND (CANDIDATES)")
+text += line("• " + b.date_candidates.slice(0,12).join(" · "))
+if(b.date_candidates.length > 12){
+text += line("• … (" + (b.date_candidates.length - 12) + " more)")
+}
+text += line()
+}
+
+text += renderEvidenceList(b.tender_return_candidates, "TENDER RETURN / DEADLINE (EVIDENCE)")
+text += renderEvidenceList(b.submission_candidates, "SUBMISSION ROUTE (EVIDENCE)")
+text += renderEvidenceList(b.programme_candidates, "PROGRAMME / DURATION (EVIDENCE)")
+text += renderEvidenceList(b.working_hours_candidates, "WORKING HOURS (EVIDENCE)")
+text += renderEvidenceList(b.retention_candidates, "RETENTION (EVIDENCE)")
+text += renderEvidenceList(b.liquidated_damages_candidates, "LIQUIDATED DAMAGES / LADs (EVIDENCE)")
+text += renderEvidenceList(b.insurance_candidates, "INSURANCE LEVELS (EVIDENCE)")
+text += renderEvidenceList(b.accreditations_candidates, "ACCREDITATIONS / COMPLIANCE (EVIDENCE)")
+
+text += renderRiskBuckets(b.risk_buckets)
+
+text += renderReqList(b.requirements_strict, "MANDATORY REQUIREMENTS (STRICT)")
+text += renderReqList(b.requirements_loose, "OTHER SUBMISSION REQUESTS (LOOSE)")
+
+// fallback: if briefing missing (old backend)
+if(!Object.keys(b).length){
+text = "This JSON doesn't contain a 'briefing' section yet.\n\n" +
+"Make sure your backend returns:\n- report.briefing\n- report.sections\n\n" +
+"Then refresh and re-upload."
+}
+
+out.textContent = text.trim() + "\n"
+}catch(err){
+out.textContent = "Render failed: " + err
+}
+}
+/* -------------------------------------------------------------------------- */
 
 })()
 </script>
