@@ -1,550 +1,329 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Lawmens Tender Pack Summary</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Lawmens Tender Pack Summary</title>
 
-  <!-- Optional: nicer font -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
-  <style>
-    :root{
-      --bg0:#f6f7fb;
-      --bg1:#ffffff;
-      --card: rgba(255,255,255,0.92);
-      --card2: rgba(255,255,255,0.98);
-      --border: rgba(15,23,42,0.10);
-      --text: rgba(15,23,42,0.92);
-      --muted: rgba(15,23,42,0.58);
+<style>
 
-      --shadow: 0 20px 50px rgba(2,6,23,0.08);
-      --shadow2: 0 10px 24px rgba(2,6,23,0.08);
+:root{
+--bg0:#f6f7fb;
+--bg1:#ffffff;
+--border:rgba(15,23,42,0.1);
+--text:#0f172a;
+--muted:#64748b;
 
-      --primaryA:#4f46e5;
-      --primaryB:#7c3aed;
+--primaryA:#4f46e5;
+--primaryB:#7c3aed;
 
-      --success:#16a34a;
-      --warn:#f59e0b;
+--shadow:0 20px 50px rgba(2,6,23,0.08);
+--radius:18px;
+}
 
-      --radius: 18px;
-      --radius2: 14px;
-    }
+*{box-sizing:border-box}
+body{
+margin:0;
+font-family:Inter,system-ui;
+background:
+radial-gradient(1200px 800px at 18% 20%, rgba(124,58,237,0.08) 0%, transparent 60%),
+linear-gradient(180deg,var(--bg0),var(--bg1));
+color:var(--text);
+}
 
-    *{ box-sizing:border-box; }
-    html,body{ height:100%; }
-    body{
-      margin:0;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-      color:var(--text);
-      background:
-        radial-gradient(1200px 800px at 18% 20%, rgba(124,58,237,0.10) 0%, rgba(124,58,237,0.00) 60%),
-        radial-gradient(1200px 800px at 80% 18%, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.00) 58%),
-        radial-gradient(1100px 700px at 70% 80%, rgba(59,130,246,0.08) 0%, rgba(59,130,246,0.00) 60%),
-        linear-gradient(180deg, var(--bg0) 0%, var(--bg1) 60%, var(--bg1) 100%);
-    }
+.wrap{
+max-width:1100px;
+margin:auto;
+padding:30px 20px 60px;
+}
 
-    .wrap{
-      max-width: 1120px;
-      margin: 0 auto;
-      padding: 34px 18px 60px;
-    }
+.top{
+display:flex;
+justify-content:center;
+margin-bottom:28px;
+}
 
-    /* Header */
-    .top{
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      padding: 18px 0 26px;
-    }
-    .brand{
-      display:flex;
-      align-items:center;
-      gap:14px;
-      user-select:none;
-      text-align:left;
-    }
-    .logoWrap{
-      width:46px;
-      height:46px;
-      border-radius: 14px;
-      background: rgba(255,255,255,0.85);
-      border: 1px solid rgba(15,23,42,0.10);
-      display:grid;
-      place-items:center;
-      box-shadow: var(--shadow2);
-      overflow:hidden;
-    }
-    .logoImg{
-      width: 34px;
-      height: 34px;
-      object-fit: contain;
-      display:block;
-    }
-    .brand h1{
-      margin:0;
-      font-size: 28px;
-      letter-spacing: -0.02em;
-      font-weight: 800;
-    }
-    .brand p{
-      margin: 4px 0 0;
-      font-size: 14px;
-      color: var(--muted);
-      font-weight: 500;
-    }
+.brand{
+display:flex;
+align-items:center;
+gap:14px;
+}
 
-    /* Main shell */
-    .shell{
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 22px;
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      padding: 22px;
-    }
+.logoWrap{
+width:46px;
+height:46px;
+border-radius:12px;
+background:white;
+border:1px solid var(--border);
+display:grid;
+place-items:center;
+}
 
-    .grid{
-      display:grid;
-      grid-template-columns: 1.05fr 1.35fr;
-      gap: 18px;
-      align-items:start;
-    }
-    @media (max-width: 980px){
-      .grid{ grid-template-columns: 1fr; }
-    }
+.logoImg{
+width:34px;
+}
 
-    .panel{
-      background: var(--card2);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      box-shadow: 0 10px 24px rgba(2,6,23,0.06);
-      padding: 18px;
-    }
-    .panel h2{
-      margin:0 0 10px;
-      font-size: 16px;
-      font-weight: 800;
-      letter-spacing: -0.01em;
-    }
+.brand h1{
+margin:0;
+font-size:28px;
+font-weight:800;
+}
 
-    .hint{
-      margin:0 0 14px;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.4;
-    }
+.brand p{
+margin:4px 0 0;
+font-size:14px;
+color:var(--muted);
+}
 
-    .row{
-      display:flex;
-      gap: 10px;
-      align-items:center;
-      flex-wrap: wrap;
-    }
+.shell{
+background:white;
+border-radius:20px;
+box-shadow:var(--shadow);
+padding:22px;
+border:1px solid var(--border);
+}
 
-    .btn{
-      border: 0;
-      border-radius: 14px;
-      padding: 11px 14px;
-      cursor:pointer;
-      font-weight: 800;
-      letter-spacing: -0.01em;
-      box-shadow: 0 10px 18px rgba(79,70,229,0.22);
-      background: linear-gradient(135deg, var(--primaryA), var(--primaryB));
-      color: white;
-      transition: transform .08s ease, filter .12s ease, opacity .12s ease;
-    }
-    .btn:active{ transform: translateY(1px); }
-    .btn:disabled{ opacity: 0.55; cursor:not-allowed; box-shadow:none; }
+.grid{
+display:grid;
+grid-template-columns:1fr 1.4fr;
+gap:18px;
+}
 
-    .btn.secondary{
-      background: rgba(255,255,255,0.95);
-      color: rgba(15,23,42,0.88);
-      border: 1px solid rgba(15,23,42,0.12);
-      box-shadow: none;
-    }
+@media(max-width:950px){
+.grid{grid-template-columns:1fr}
+}
 
-    .status{
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--muted);
-      display:flex;
-      gap: 8px;
-      align-items:center;
-    }
+.panel{
+background:white;
+border-radius:var(--radius);
+border:1px solid var(--border);
+padding:18px;
+}
 
-    .pill{
-      display:inline-flex;
-      align-items:center;
-      gap:8px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      background: rgba(79,70,229,0.10);
-      border: 1px solid rgba(79,70,229,0.16);
-      color: rgba(79,70,229,0.95);
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .pill.ok{
-      background: rgba(22,163,74,0.10);
-      border-color: rgba(22,163,74,0.16);
-      color: rgba(22,163,74,0.92);
-    }
-    .pill.warn{
-      background: rgba(245,158,11,0.10);
-      border-color: rgba(245,158,11,0.18);
-      color: rgba(180,83,9,0.95);
-    }
+.panel h2{
+margin:0 0 10px;
+font-size:16px;
+font-weight:800;
+}
 
-    .mini{
-      display:grid;
-      grid-template-columns: 1fr;
-      gap: 10px;
-      margin-top: 14px;
-    }
+.hint{
+font-size:13px;
+color:var(--muted);
+margin-bottom:14px;
+}
 
-    .mini .box{
-      border-radius: var(--radius2);
-      border: 1px solid rgba(15,23,42,0.10);
-      background: rgba(255,255,255,0.92);
-      padding: 12px;
-    }
-    .mini .box b{
-      display:block;
-      font-size: 12px;
-      margin-bottom: 6px;
-      color: rgba(15,23,42,0.84);
-    }
-    .mini .box span{
-      font-size: 12px;
-      color: var(--muted);
-      line-height: 1.4;
-    }
+.row{
+display:flex;
+gap:10px;
+align-items:center;
+flex-wrap:wrap;
+}
 
-    /* Result block */
-    .resultHead{
-      display:flex;
-      align-items:center;
-      justify-content: space-between;
-      gap: 10px;
-      margin-bottom: 10px;
-    }
+.btn{
+border:0;
+border-radius:12px;
+padding:10px 16px;
+font-weight:700;
+cursor:pointer;
+background:linear-gradient(135deg,var(--primaryA),var(--primaryB));
+color:white;
+}
 
-    .pre{
-      margin:0;
-      border-radius: 16px;
-      border: 1px solid rgba(15,23,42,0.12);
-      background: linear-gradient(180deg, rgba(15,23,42,0.96), rgba(2,6,23,0.98));
-      color: rgba(226,232,240,0.92);
-      padding: 14px;
-      min-height: 320px;
-      max-height: 560px;
-      overflow:auto;
-      font-size: 12.5px;
-      line-height: 1.45;
-    }
+.btn.secondary{
+background:white;
+border:1px solid var(--border);
+color:var(--text);
+}
 
-    .footer{
-      margin-top: 14px;
-      display:flex;
-      justify-content: space-between;
-      gap: 10px;
-      flex-wrap: wrap;
-      color: var(--muted);
-      font-size: 12px;
-    }
+.upload{
+border-radius:14px;
+border:1px solid var(--border);
+padding:14px;
+}
 
-    .kbd{
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-      font-size: 11px;
-      padding: 2px 6px;
-      border-radius: 8px;
-      border: 1px solid rgba(15,23,42,0.12);
-      background: rgba(255,255,255,0.9);
-      color: rgba(15,23,42,0.80);
-    }
+.hiddenInput{
+display:none;
+}
 
-    /* ===== Dropzone file picker ===== */
-    .upload{
-      border-radius: var(--radius2);
-      border: 1px solid rgba(15,23,42,0.10);
-      background: rgba(255,255,255,0.70);
-      padding: 14px;
-    }
+.dropzone{
+border:2px dashed rgba(79,70,229,0.35);
+border-radius:14px;
+padding:20px;
+cursor:pointer;
+text-align:center;
+background:#fafafa;
+transition:.15s;
+}
 
-    .hiddenInput{
-      position:absolute !important;
-      width:1px !important;
-      height:1px !important;
-      padding:0 !important;
-      margin:-1px !important;
-      overflow:hidden !important;
-      clip:rect(0,0,0,0) !important;
-      white-space:nowrap !important;
-      border:0 !important;
-    }
+.dropzone:hover{
+background:#f3f4ff;
+}
 
-    .dropzone{
-      border: 1px dashed rgba(15,23,42,0.22);
-      border-radius: 16px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.72));
-      padding: 14px;
-      display:flex;
-      align-items:center;
-      justify-content: space-between;
-      gap: 14px;
-      cursor:pointer;
-      transition: border-color .12s ease, transform .08s ease, box-shadow .12s ease;
-      user-select:none;
-    }
-    .dropzone:hover{
-      border-color: rgba(79,70,229,0.40);
-      box-shadow: 0 12px 22px rgba(79,70,229,0.10);
-    }
-    .dropzone:active{ transform: translateY(1px); }
+.dropzone.dragover{
+background:#eef2ff;
+}
 
-    .dzLeft{
-      display:flex;
-      align-items:center;
-      gap: 12px;
-      min-width: 0;
-    }
+.resultHead{
+display:flex;
+justify-content:space-between;
+align-items:center;
+margin-bottom:12px;
+}
 
-    .dzIcon{
-      width: 42px;
-      height: 42px;
-      border-radius: 14px;
-      background: rgba(79,70,229,0.10);
-      border: 1px solid rgba(79,70,229,0.16);
-      display:grid;
-      place-items:center;
-      flex: 0 0 auto;
-    }
+.report{
+border-radius:12px;
+border:1px solid var(--border);
+background:white;
+padding:18px;
+font-size:14px;
+line-height:1.6;
+max-height:520px;
+overflow:auto;
+white-space:pre-line;
+}
 
-    .dzText{
-      min-width: 0;
-    }
-    .dzText .t{
-      font-weight: 800;
-      letter-spacing: -0.01em;
-      font-size: 13px;
-      color: rgba(15,23,42,0.90);
-      margin:0;
-    }
-    .dzText .s{
-      margin: 4px 0 0;
-      font-size: 12px;
-      color: var(--muted);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 520px;
-    }
+.footer{
+margin-top:12px;
+font-size:12px;
+color:var(--muted);
+display:flex;
+justify-content:space-between;
+flex-wrap:wrap;
+}
 
-    .dzRight{
-      display:flex;
-      align-items:center;
-      gap: 10px;
-      flex: 0 0 auto;
-    }
-
-    .dzChip{
-      font-size: 12px;
-      font-weight: 700;
-      padding: 7px 10px;
-      border-radius: 999px;
-      border: 1px solid rgba(15,23,42,0.12);
-      background: rgba(255,255,255,0.92);
-      color: rgba(15,23,42,0.78);
-    }
-
-    .dropzone.dragover{
-      border-color: rgba(79,70,229,0.55);
-      box-shadow: 0 16px 26px rgba(79,70,229,0.14);
-      background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(238,242,255,0.78));
-    }
-  </style>
+</style>
 </head>
 
 <body>
-  <div class="wrap">
-    <header class="top">
-      <div class="brand">
-        <div class="logoWrap" aria-hidden="true">
-          <img class="logoImg" src="/static/logo-new.png" alt="" />
-        </div>
-        <div>
-          <h1>Lawmens Tender Pack Summary</h1>
-          <p>Upload a tender pack → get an instant pack breakdown</p>
-        </div>
-      </div>
-    </header>
 
-    <div class="shell">
-      <div class="grid">
+<div class="wrap">
 
-        <!-- LEFT -->
-        <section class="panel">
-          <div class="row" style="justify-content:space-between;">
-            <h2>Upload</h2>
-            <span class="pill">Step 1</span>
-          </div>
-          <p class="hint">
-            Upload tender files (ZIP, PDFs, Excel, Word, images) and we’ll scan what’s inside: drawings, BOQ, registers,
-            forms, addenda and more. This is a lightweight “triage” tool — perfect for quickly seeing what you’ve actually been sent.
-          </p>
+<header class="top">
+<div class="brand">
+<div class="logoWrap">
+<img class="logoImg" src="/static/logo-new.png">
+</div>
+<div>
+<h1>Lawmens Tender Pack Summary</h1>
+<p>Upload a tender pack → get an instant breakdown</p>
+</div>
+</div>
+</header>
 
-          <div class="upload">
-            <!-- ONLY CHANGE: allow universal files + multiple selection -->
-            <input id="zip" class="hiddenInput" type="file" multiple />
+<div class="shell">
 
-            <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="Upload tender files">
-              <div class="dzLeft">
-                <div class="dzIcon" aria-hidden="true">
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-                    <path d="M12 3v10" stroke="rgba(79,70,229,0.95)" stroke-width="2" stroke-linecap="round"/>
-                    <path d="M8 7l4-4 4 4" stroke="rgba(79,70,229,0.95)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M4 14v4a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-4" stroke="rgba(15,23,42,0.60)" stroke-width="2" stroke-linecap="round"/>
-                  </svg>
-                </div>
-                <div class="dzText">
-                  <p class="t">Click to upload (or drag and drop)</p>
-                  <!-- ONLY CHANGE: text no longer ZIP-only -->
-                  <p class="s" id="fileName">ZIP, PDF, Excel, Word, images • No files selected</p>
-                </div>
-              </div>
-              <div class="dzRight">
-                <!-- ONLY CHANGE: chip no longer .zip -->
-                <span class="dzChip">Multiple</span>
-              </div>
-            </div>
+<div class="grid">
 
-            <div class="row" style="margin-top:12px; justify-content:space-between;">
-              <button id="btn" class="btn" onclick="uploadZip()">Analyse</button>
+<!-- LEFT PANEL -->
+<section class="panel">
 
-              <div class="status">
-                <span class="pill ok" id="statusPill" style="display:none;">Ready</span>
-                <span id="status">Idle</span>
-                <span class="pill warn">v1</span>
-              </div>
-            </div>
-          </div>
+<div class="row" style="justify-content:space-between;">
+<h2>Upload</h2>
+<span>Step 1</span>
+</div>
 
-          <div class="mini">
-            <div class="box">
-              <b>What you’ll get</b>
-              <span>
-                File counts by type, likely BOQ/register/addenda detection, and basic drawing number/revision guesses.
-              </span>
-            </div>
-            <div class="box">
-              <b>Tips</b>
-              <span>
-                If the pack is huge, keep it under ~300MB for now. For best results, keep filenames clear (e.g. A101 Rev P03, BOQ.xlsx).
-              </span>
-            </div>
-            <div class="box">
-              <b>Keyboard quick</b>
-              <span>
-                After upload: click <span class="kbd">Download JSON</span> to save the report and attach it to your enquiry / Monday item.
-              </span>
-            </div>
-          </div>
-        </section>
+<p class="hint">
+Upload tender files (ZIP, PDFs, Excel, Word).  
+We'll scan the pack and generate a quick briefing.
+</p>
 
-        <!-- RIGHT -->
-        <section class="panel">
-          <div class="resultHead">
-            <div class="row" style="gap:10px;">
-              <h2 style="margin:0;">Tender Pack Report</h2>
-              <span class="pill">Step 2</span>
-            </div>
-            <button class="btn secondary" onclick="downloadJson()" id="downloadBtn" disabled>Download JSON</button>
-          </div>
+<div class="upload">
 
-          <pre id="out" class="pre">No result yet.</pre>
+<input id="zip" class="hiddenInput" type="file" multiple>
 
-          <div class="footer">
-            <span>
-              Status updates appear top-left. If you see an error, it’s usually a corrupted file or a file limit being hit.
-            </span>
-            <span>
-              Endpoint: <span class="kbd">/api/analyse</span>
-            </span>
-          </div>
-        </section>
+<div id="dropzone" class="dropzone">
+Click to upload (or drag files here)
+<div style="font-size:12px;color:#6b7280;margin-top:6px" id="fileName">
+No files selected
+</div>
+</div>
 
-      </div>
-    </div>
-  </div>
+<div class="row" style="margin-top:12px;justify-content:space-between;">
+<button id="btn" class="btn" onclick="uploadZip()">Analyse</button>
 
-  <script src="/static/app.js"></script>
+<div id="status">Idle</div>
 
-  <script>
-    (function(){
-      const input = document.getElementById("zip");
-      const dz = document.getElementById("dropzone");
-      const nameEl = document.getElementById("fileName");
+</div>
 
-      function setNameFromInput(){
-        const files = input.files ? Array.from(input.files) : [];
-        if (!files.length) {
-          nameEl.textContent = "ZIP, PDF, Excel, Word, images • No files selected";
-          return;
-        }
-        if (files.length === 1) {
-          nameEl.textContent = files[0].name;
-          return;
-        }
-        nameEl.textContent = `${files.length} files selected`;
-      }
+</div>
 
-      dz.addEventListener("click", () => input.click());
-      dz.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          input.click();
-        }
-      });
+</section>
 
-      input.addEventListener("change", setNameFromInput);
 
-      dz.addEventListener("dragover", (e) => {
-        e.preventDefault();
-        dz.classList.add("dragover");
-      });
-      dz.addEventListener("dragleave", () => dz.classList.remove("dragover"));
-      dz.addEventListener("drop", (e) => {
-        e.preventDefault();
-        dz.classList.remove("dragover");
+<!-- RIGHT PANEL -->
+<section class="panel">
 
-        const dropped = e.dataTransfer && e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
-        if (!dropped.length) return;
+<div class="resultHead">
+<h2>Tender Pack Report</h2>
+<button class="btn secondary" onclick="downloadJson()" id="downloadBtn" disabled>
+Download JSON
+</button>
+</div>
 
-        // Put dropped files into the hidden input so uploadZip() keeps working
-        const dt = new DataTransfer();
-        dropped.forEach(f => dt.items.add(f));
-        input.files = dt.files;
+<div id="out" class="report">
+Upload documents to generate a tender briefing.
+</div>
 
-        setNameFromInput();
-      });
+<div class="footer">
+<span>Status updates appear above</span>
+<span>/api/analyse</span>
+</div>
 
-      // status pill sync (same as before)
-      const statusEl = document.getElementById("status");
-      const pill = document.getElementById("statusPill");
-      const obs = new MutationObserver(() => {
-        const t = (statusEl.textContent || "").toLowerCase();
-        pill.style.display = "inline-flex";
-        if (t.includes("done")) { pill.textContent = "Complete"; pill.className = "pill ok"; }
-        else if (t.includes("error")) { pill.textContent = "Error"; pill.className = "pill warn"; }
-        else if (t.includes("upload") || t.includes("analys")) { pill.textContent = "Working"; pill.className = "pill"; }
-        else { pill.textContent = "Ready"; pill.className = "pill ok"; }
-      });
-      obs.observe(statusEl, { childList: true, subtree: true });
-    })();
-  </script>
+</section>
+
+</div>
+
+</div>
+
+</div>
+
+
+<script src="/static/app.js"></script>
+
+<script>
+(function(){
+
+const input=document.getElementById("zip")
+const dz=document.getElementById("dropzone")
+const name=document.getElementById("fileName")
+
+dz.onclick=()=>input.click()
+
+input.onchange=()=>{
+if(!input.files.length){
+name.textContent="No files selected"
+return
+}
+name.textContent=input.files.length+" files selected"
+}
+
+dz.addEventListener("dragover",(e)=>{
+e.preventDefault()
+dz.classList.add("dragover")
+})
+
+dz.addEventListener("dragleave",()=>dz.classList.remove("dragover"))
+
+dz.addEventListener("drop",(e)=>{
+e.preventDefault()
+dz.classList.remove("dragover")
+
+const dt=new DataTransfer()
+
+for(const f of e.dataTransfer.files){
+dt.items.add(f)
+}
+
+input.files=dt.files
+name.textContent=input.files.length+" files selected"
+})
+
+})()
+</script>
+
 </body>
 </html>
