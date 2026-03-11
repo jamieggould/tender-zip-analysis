@@ -7,3 +7,4 @@ python-multipart==0.0.9
 pypdf==4.3.1
 openpyxl==3.1.5
 python-docx==1.1.2
+openai>=1.40.0
