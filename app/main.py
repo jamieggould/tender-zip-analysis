@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import tempfile
+import traceback
 import zipfile
 from collections import Counter, defaultdict
 from datetime import datetime
@@ -36,6 +37,10 @@ templates = Jinja2Templates(directory="templates")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+OPENAI_TIMEOUT_SEC = float(os.getenv("OPENAI_TIMEOUT_SEC", "12"))
+OPENAI_MAX_SOURCES_FOR_ENHANCE = int(os.getenv("OPENAI_MAX_SOURCES_FOR_ENHANCE", "18"))
+OPENAI_MAX_EVIDENCE_ITEMS = int(os.getenv("OPENAI_MAX_EVIDENCE_ITEMS", "8"))
+
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 PDF_MAX_PAGES = 14
@@ -297,6 +302,40 @@ def _is_supported_upload(filename: str) -> bool:
     if Path(filename).suffix.lower() in IGNORED_SUFFIXES:
         return False
     return True
+
+
+def _should_skip_ai(briefing: dict[str, Any]) -> bool:
+    if not openai_client:
+        return True
+
+    if (briefing.get("sources_scanned") or 0) > OPENAI_MAX_SOURCES_FOR_ENHANCE:
+        return True
+
+    evidence = briefing.get("evidence") or {}
+    evidence_items = 0
+    for value in evidence.values():
+        if isinstance(value, list):
+            evidence_items += len(value)
+
+    if evidence_items > 40:
+        return True
+
+    payload_size_est = len(json.dumps({
+        "overview": briefing.get("overview", ""),
+        "commercial_summary": briefing.get("commercial_summary", ""),
+        "programme_access_summary": briefing.get("programme_access_summary", ""),
+        "risk_summary": briefing.get("risk_summary", ""),
+        "submission_summary": briefing.get("submission_summary", ""),
+        "key_facts": briefing.get("key_facts", {}),
+        "constraints": briefing.get("constraints", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
+        "requirements_strict": briefing.get("requirements_strict", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
+        "requirements_loose": briefing.get("requirements_loose", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
+        "pricing_watchouts": briefing.get("pricing_watchouts", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
+        "clarifications": briefing.get("clarifications", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
+        "missing": briefing.get("missing", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
+    }, ensure_ascii=False))
+
+    return payload_size_est > 18000
 
 
 def safe_extract_zip(zip_path: Path, extract_to: Path, max_files: int = 5000) -> list[Path]:
@@ -827,10 +866,7 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
     if not commercial_summary_parts:
         commercial_summary_parts.append("No strong commercial headline terms were confidently extracted beyond the core tender instructions.")
 
-    if strict_clean:
-        pricing_watchouts = strict_clean[:8]
-    else:
-        pricing_watchouts = constraints[:8]
+    pricing_watchouts = strict_clean[:8] if strict_clean else constraints[:8]
 
     clarifications = missing[:]
     if not clarifications and not submission:
@@ -890,7 +926,7 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
 
 
 def ai_enhance_briefing(briefing: dict[str, Any]) -> dict[str, Any]:
-    if not openai_client:
+    if _should_skip_ai(briefing):
         return briefing
 
     payload = {
@@ -900,14 +936,13 @@ def ai_enhance_briefing(briefing: dict[str, Any]) -> dict[str, Any]:
         "risk_summary": briefing.get("risk_summary", ""),
         "submission_summary": briefing.get("submission_summary", ""),
         "key_facts": briefing.get("key_facts", {}),
-        "dates_found": briefing.get("dates_found", [])[:12],
-        "constraints": briefing.get("constraints", [])[:10],
-        "requirements_strict": briefing.get("requirements_strict", [])[:12],
-        "requirements_loose": briefing.get("requirements_loose", [])[:10],
-        "pricing_watchouts": briefing.get("pricing_watchouts", [])[:10],
-        "clarifications": briefing.get("clarifications", [])[:10],
-        "missing": briefing.get("missing", [])[:10],
-        "evidence": briefing.get("evidence", {}),
+        "dates_found": briefing.get("dates_found", [])[:10],
+        "constraints": briefing.get("constraints", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
+        "requirements_strict": briefing.get("requirements_strict", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
+        "requirements_loose": briefing.get("requirements_loose", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
+        "pricing_watchouts": briefing.get("pricing_watchouts", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
+        "clarifications": briefing.get("clarifications", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
+        "missing": briefing.get("missing", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
     }
 
     system_prompt = """
@@ -957,6 +992,7 @@ Return STRICT JSON with this exact structure:
         resp = openai_client.chat.completions.create(
             model=OPENAI_MODEL,
             temperature=0.1,
+            timeout=OPENAI_TIMEOUT_SEC,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -1264,6 +1300,7 @@ async def analyse(
                     "addenda_found": has_cat("addenda"),
                     "ai_enabled": bool(openai_client),
                     "ai_model": OPENAI_MODEL if openai_client else None,
+                    "ai_skipped": _should_skip_ai(raw_briefing),
                 },
                 "briefing": briefing,
                 "sections": dict(sections),
@@ -1272,4 +1309,6 @@ async def analyse(
             return JSONResponse(report)
 
     except Exception as e:
+        print("ANALYSE ERROR:")
+        traceback.print_exc()
         return JSONResponse({"error": f"Analyse failed: {e}"}, status_code=500)
