@@ -37,10 +37,7 @@ templates = Jinja2Templates(directory="templates")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
-OPENAI_TIMEOUT_SEC = float(os.getenv("OPENAI_TIMEOUT_SEC", "12"))
-OPENAI_MAX_SOURCES_FOR_ENHANCE = int(os.getenv("OPENAI_MAX_SOURCES_FOR_ENHANCE", "18"))
-OPENAI_MAX_EVIDENCE_ITEMS = int(os.getenv("OPENAI_MAX_EVIDENCE_ITEMS", "8"))
-
+OPENAI_TIMEOUT_SEC = float(os.getenv("OPENAI_TIMEOUT_SEC", "18"))
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 PDF_MAX_PAGES = 14
@@ -304,28 +301,36 @@ def _is_supported_upload(filename: str) -> bool:
     return True
 
 
-def _should_skip_ai(briefing: dict[str, Any]) -> bool:
-    if not openai_client:
-        return True
+def _build_ai_payload(briefing: dict[str, Any]) -> dict[str, Any]:
+    evidence = briefing.get("evidence") or {}
 
-    payload_size_est = len(json.dumps({
+    compact_evidence = {
+        "tender_return_candidates": _trim_list(evidence.get("tender_return_candidates"), 3, 260),
+        "submission_candidates": _trim_list(evidence.get("submission_candidates"), 3, 260),
+        "programme_candidates": _trim_list(evidence.get("programme_candidates"), 3, 260),
+        "working_hours_candidates": _trim_list(evidence.get("working_hours_candidates"), 3, 260),
+        "retention_candidates": _trim_list(evidence.get("retention_candidates"), 3, 260),
+        "liquidated_damages_candidates": _trim_list(evidence.get("liquidated_damages_candidates"), 3, 260),
+        "insurance_candidates": _trim_list(evidence.get("insurance_candidates"), 3, 260),
+        "accreditations_candidates": _trim_list(evidence.get("accreditations_candidates"), 3, 220),
+    }
+
+    return {
         "overview": briefing.get("overview", ""),
         "commercial_summary": briefing.get("commercial_summary", ""),
         "programme_access_summary": briefing.get("programme_access_summary", ""),
         "risk_summary": briefing.get("risk_summary", ""),
         "submission_summary": briefing.get("submission_summary", ""),
         "key_facts": briefing.get("key_facts", {}),
-        "constraints": briefing.get("constraints", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
-        "requirements_strict": briefing.get("requirements_strict", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
-        "requirements_loose": briefing.get("requirements_loose", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
-        "pricing_watchouts": briefing.get("pricing_watchouts", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
-        "clarifications": briefing.get("clarifications", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
-        "missing": briefing.get("missing", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
-    }, ensure_ascii=False))
-
-    # Keep the OpenAI step enabled for normal/large tender packs.
-    # Only skip when the request is genuinely oversized.
-    return payload_size_est > 60000
+        "dates_found": briefing.get("dates_found", [])[:10],
+        "constraints": briefing.get("constraints", [])[:8],
+        "requirements_strict": briefing.get("requirements_strict", [])[:10],
+        "requirements_loose": briefing.get("requirements_loose", [])[:8],
+        "pricing_watchouts": briefing.get("pricing_watchouts", [])[:8],
+        "clarifications": briefing.get("clarifications", [])[:8],
+        "missing": briefing.get("missing", [])[:8],
+        "evidence": compact_evidence,
+    }
 
 
 def safe_extract_zip(zip_path: Path, extract_to: Path, max_files: int = 5000) -> list[Path]:
@@ -916,24 +921,10 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
 
 
 def ai_enhance_briefing(briefing: dict[str, Any]) -> dict[str, Any]:
-    if _should_skip_ai(briefing):
+    if not openai_client:
         return briefing
 
-    payload = {
-        "overview": briefing.get("overview", ""),
-        "commercial_summary": briefing.get("commercial_summary", ""),
-        "programme_access_summary": briefing.get("programme_access_summary", ""),
-        "risk_summary": briefing.get("risk_summary", ""),
-        "submission_summary": briefing.get("submission_summary", ""),
-        "key_facts": briefing.get("key_facts", {}),
-        "dates_found": briefing.get("dates_found", [])[:10],
-        "constraints": briefing.get("constraints", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
-        "requirements_strict": briefing.get("requirements_strict", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
-        "requirements_loose": briefing.get("requirements_loose", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
-        "pricing_watchouts": briefing.get("pricing_watchouts", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
-        "clarifications": briefing.get("clarifications", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
-        "missing": briefing.get("missing", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
-    }
+    payload = _build_ai_payload(briefing)
 
     system_prompt = """
 You are a senior UK construction estimator reviewing a tender pack.
@@ -949,6 +940,9 @@ Rules:
 - Expand each section into useful plain English, but stay concise.
 - Prioritise deadline, submission route, programme, access, working hours, LDs, retention, insurance, permits, asbestos, isolations, waste, temporary works.
 - Only keep requirements that matter to pricing, delivery, risk, logistics, compliance, or tender submission.
+- If a date looks suspicious or unsupported, do not overstate it.
+- Do not combine unrelated fragments into one sentence.
+- Prefer short, readable sentences over dense wording.
 
 Return STRICT JSON with this exact structure:
 {
@@ -1055,10 +1049,12 @@ def build_pdf_report(report: dict[str, Any]) -> bytes:
     story: list[Any] = []
 
     def esc(s: Any) -> str:
-        return (str(s or "")
-                .replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;"))
+        return (
+            str(s or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
 
     def add_paragraph(text: str, style: str = "BodySmall") -> None:
         if text:
@@ -1079,10 +1075,12 @@ def build_pdf_report(report: dict[str, Any]) -> bytes:
 
     title = briefing.get("title") or "Tender Pack Summary"
     story.append(Paragraph(esc(title), styles["TitleSmall"]))
-    story.append(Paragraph(
-        esc(f"Generated {datetime.utcnow().strftime('%d %b %Y %H:%M UTC')} • Files scanned: {summary.get('total_files_scanned', 0)}"),
-        styles["Meta"],
-    ))
+    story.append(
+        Paragraph(
+            esc(f"Generated {datetime.utcnow().strftime('%d %b %Y %H:%M UTC')} • Files scanned: {summary.get('total_files_scanned', 0)}"),
+            styles["Meta"],
+        )
+    )
     story.append(Spacer(1, 4 * mm))
 
     story.append(Paragraph("Executive Summary", styles["SectionHead"]))
@@ -1290,7 +1288,6 @@ async def analyse(
                     "addenda_found": has_cat("addenda"),
                     "ai_enabled": bool(openai_client),
                     "ai_model": OPENAI_MODEL if openai_client else None,
-                    "ai_skipped": bool(openai_client) and not bool(briefing.get("ai_used")),
                     "ai_used": bool(briefing.get("ai_used")),
                 },
                 "briefing": briefing,
