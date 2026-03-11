@@ -308,18 +308,6 @@ def _should_skip_ai(briefing: dict[str, Any]) -> bool:
     if not openai_client:
         return True
 
-    if (briefing.get("sources_scanned") or 0) > OPENAI_MAX_SOURCES_FOR_ENHANCE:
-        return True
-
-    evidence = briefing.get("evidence") or {}
-    evidence_items = 0
-    for value in evidence.values():
-        if isinstance(value, list):
-            evidence_items += len(value)
-
-    if evidence_items > 40:
-        return True
-
     payload_size_est = len(json.dumps({
         "overview": briefing.get("overview", ""),
         "commercial_summary": briefing.get("commercial_summary", ""),
@@ -335,7 +323,9 @@ def _should_skip_ai(briefing: dict[str, Any]) -> bool:
         "missing": briefing.get("missing", [])[:OPENAI_MAX_EVIDENCE_ITEMS],
     }, ensure_ascii=False))
 
-    return payload_size_est > 18000
+    # Keep the OpenAI step enabled for normal/large tender packs.
+    # Only skip when the request is genuinely oversized.
+    return payload_size_est > 60000
 
 
 def safe_extract_zip(zip_path: Path, extract_to: Path, max_files: int = 5000) -> list[Path]:
@@ -1300,7 +1290,8 @@ async def analyse(
                     "addenda_found": has_cat("addenda"),
                     "ai_enabled": bool(openai_client),
                     "ai_model": OPENAI_MODEL if openai_client else None,
-                    "ai_skipped": _should_skip_ai(raw_briefing),
+                    "ai_skipped": bool(openai_client) and not bool(briefing.get("ai_used")),
+                    "ai_used": bool(briefing.get("ai_used")),
                 },
                 "briefing": briefing,
                 "sections": dict(sections),
