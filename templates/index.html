@@ -11,418 +11,574 @@
 
 <style>
 :root{
---bg0:#f6f7fb;
---bg1:#ffffff;
---card:rgba(255,255,255,0.92);
---card2:rgba(255,255,255,0.98);
---border:rgba(15,23,42,0.12);
---text:rgba(15,23,42,0.92);
---muted:rgba(15,23,42,0.58);
+  --bg0:#f6f7fb;
+  --bg1:#ffffff;
+  --card:rgba(255,255,255,0.90);
+  --card2:rgba(255,255,255,0.98);
+  --border:rgba(15,23,42,0.10);
+  --border-strong:rgba(15,23,42,0.14);
+  --text:rgba(15,23,42,0.92);
+  --muted:rgba(15,23,42,0.58);
 
---shadow:0 20px 50px rgba(2,6,23,0.08);
---shadow2:0 10px 24px rgba(2,6,23,0.08);
+  --shadow:0 24px 60px rgba(2,6,23,0.08);
+  --shadow2:0 12px 28px rgba(2,6,23,0.08);
+  --shadow3:0 6px 18px rgba(15,23,42,0.06);
 
---primaryA:#4f46e5;
---primaryB:#7c3aed;
+  --primaryA:#4f46e5;
+  --primaryB:#7c3aed;
 
---success:#16a34a;
---warn:#f59e0b;
+  --success:#16a34a;
+  --warn:#f59e0b;
 
---radius:18px;
---radius2:14px;
+  --radius:22px;
+  --radius2:16px;
+  --radius3:12px;
 }
 
 *{box-sizing:border-box}
-html,body{height:100%}
+
+html{
+  min-height:100%;
+  background:
+    radial-gradient(1200px 820px at 18% 18%, rgba(124,58,237,0.10) 0%, transparent 60%),
+    radial-gradient(1200px 820px at 82% 16%, rgba(34,197,94,0.08) 0%, transparent 58%),
+    linear-gradient(180deg,var(--bg0) 0%, #f7f8fc 40%, var(--bg1) 100%);
+  background-attachment:fixed;
+}
 
 body{
-margin:0;
-font-family:Inter,system-ui;
-color:var(--text);
-background:
-radial-gradient(1200px 800px at 18% 20%, rgba(124,58,237,0.10) 0%, transparent 60%),
-radial-gradient(1200px 800px at 80% 18%, rgba(34,197,94,0.08) 0%, transparent 58%),
-linear-gradient(180deg,var(--bg0),var(--bg1));
+  margin:0;
+  min-height:100vh;
+  font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  color:var(--text);
+  background:transparent;
+}
+
+body::before{
+  content:"";
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0)),
+    radial-gradient(900px 500px at 50% -5%, rgba(255,255,255,0.45), transparent 70%);
+  z-index:0;
 }
 
 .wrap{
-max-width:1120px;
-margin:0 auto;
-padding:34px 18px 60px;
+  position:relative;
+  z-index:1;
+  max-width:1180px;
+  margin:0 auto;
+  padding:40px 20px 72px;
 }
 
 .top{
-display:flex;
-align-items:center;
-justify-content:center;
-padding:18px 0 26px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:8px 0 30px;
 }
 
 .brand{
-display:flex;
-align-items:center;
-gap:14px;
+  display:flex;
+  align-items:center;
+  gap:16px;
 }
 
 .logoWrap{
-width:46px;
-height:46px;
-border-radius:14px;
-background:white;
-border:1px solid var(--border);
-display:grid;
-place-items:center;
-box-shadow:var(--shadow2);
+  width:56px;
+  height:56px;
+  border-radius:16px;
+  background:rgba(255,255,255,0.94);
+  border:1px solid var(--border);
+  display:grid;
+  place-items:center;
+  box-shadow:var(--shadow2);
+  backdrop-filter:blur(8px);
 }
 
 .logoImg{
-width:34px;
-height:34px;
-object-fit:contain;
+  width:38px;
+  height:38px;
+  object-fit:contain;
 }
 
 .brand h1{
-margin:0;
-font-size:28px;
-font-weight:800;
+  margin:0;
+  font-size:clamp(28px, 3vw, 40px);
+  line-height:1.02;
+  font-weight:800;
+  letter-spacing:-0.03em;
 }
 
 .brand p{
-margin:4px 0 0;
-font-size:14px;
-color:var(--muted);
+  margin:8px 0 0;
+  font-size:15px;
+  color:var(--muted);
+  letter-spacing:-0.01em;
 }
 
 .shell{
-background:var(--card);
-border:1px solid var(--border);
-border-radius:22px;
-box-shadow:var(--shadow);
-padding:22px;
+  background:var(--card);
+  border:1px solid rgba(255,255,255,0.45);
+  border-radius:28px;
+  box-shadow:var(--shadow);
+  padding:18px;
+  backdrop-filter:blur(14px);
 }
 
 .grid{
-display:grid;
-grid-template-columns:1.05fr 1.35fr;
-gap:18px;
+  display:grid;
+  grid-template-columns:minmax(330px, 0.95fr) minmax(0, 1.4fr);
+  gap:18px;
+  align-items:start;
 }
 
 .panel{
-background:var(--card2);
-border:1px solid var(--border);
-border-radius:var(--radius);
-padding:18px;
+  background:var(--card2);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:20px;
+  box-shadow:var(--shadow3);
 }
 
 .panel h2{
-margin:0 0 10px;
-font-size:16px;
-font-weight:800;
+  margin:0;
+  font-size:16px;
+  font-weight:800;
+  letter-spacing:-0.02em;
 }
 
 .hint{
-margin:0 0 14px;
-color:var(--muted);
-font-size:13px;
+  margin:10px 0 16px;
+  color:var(--muted);
+  font-size:13px;
+  line-height:1.5;
 }
 
 .row{
-display:flex;
-gap:10px;
-align-items:center;
-flex-wrap:wrap;
+  display:flex;
+  gap:10px;
+  align-items:center;
+  flex-wrap:wrap;
 }
 
 .btn{
-border:0;
-border-radius:14px;
-padding:11px 14px;
-cursor:pointer;
-font-weight:800;
-background:linear-gradient(135deg,var(--primaryA),var(--primaryB));
-color:white;
+  appearance:none;
+  border:0;
+  border-radius:14px;
+  padding:11px 15px;
+  cursor:pointer;
+  font-weight:800;
+  font-size:13px;
+  letter-spacing:-0.01em;
+  background:linear-gradient(135deg,var(--primaryA),var(--primaryB));
+  color:white;
+  box-shadow:0 12px 24px rgba(79,70,229,0.18);
+  transition:transform .16s ease, box-shadow .16s ease, opacity .16s ease;
+}
+
+.btn:hover:not(:disabled){
+  transform:translateY(-1px);
+  box-shadow:0 14px 28px rgba(79,70,229,0.22);
 }
 
 .btn.secondary{
-background:white;
-color:rgba(15,23,42,0.88);
-border:1px solid rgba(15,23,42,0.12);
+  background:rgba(255,255,255,0.98);
+  color:rgba(15,23,42,0.88);
+  border:1px solid rgba(15,23,42,0.10);
+  box-shadow:none;
+}
+
+.btn.secondary:hover:not(:disabled){
+  border-color:rgba(79,70,229,0.20);
+  color:#1e1b4b;
 }
 
 .btn:disabled{
-opacity:.55;
-cursor:not-allowed;
+  opacity:.55;
+  cursor:not-allowed;
+  transform:none;
+  box-shadow:none;
 }
 
 .upload{
-border-radius:var(--radius2);
-border:1px solid rgba(15,23,42,0.10);
-background:white;
-padding:14px;
+  border-radius:18px;
+  border:1px solid rgba(15,23,42,0.08);
+  background:linear-gradient(180deg, rgba(255,255,255,0.96), rgba(255,255,255,0.90));
+  padding:16px;
 }
 
 .hiddenInput{
-position:absolute;
-width:1px;
-height:1px;
-overflow:hidden;
+  position:absolute;
+  width:1px;
+  height:1px;
+  overflow:hidden;
+  opacity:0;
+  pointer-events:none;
 }
 
 .dropzone{
-border:1px dashed rgba(15,23,42,0.22);
-border-radius:16px;
-background:white;
-padding:16px;
-cursor:pointer;
-display:flex;
-align-items:center;
-justify-content:space-between;
-gap:12px;
+  border:1px dashed rgba(15,23,42,0.18);
+  border-radius:18px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,250,252,0.96));
+  padding:18px 18px;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  min-height:84px;
+  transition:border-color .16s ease, box-shadow .16s ease, transform .16s ease, background .16s ease;
 }
 
 .dropzone:hover{
-border-color:rgba(79,70,229,0.4);
+  border-color:rgba(79,70,229,0.32);
+  box-shadow:0 8px 18px rgba(79,70,229,0.08);
+  transform:translateY(-1px);
+}
+
+.dropzoneMain{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+
+.dropzoneTitle{
+  font-size:14px;
+  font-weight:700;
+  color:rgba(15,23,42,0.88);
+  letter-spacing:-0.01em;
+}
+
+.dropzoneSub{
+  font-size:12px;
+  color:var(--muted);
+}
+
+.fileCount{
+  text-align:right;
+  font-size:13px;
+  font-weight:700;
+  color:rgba(15,23,42,0.82);
+  min-width:110px;
+}
+
+.status{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-size:13px;
+  font-weight:600;
+  color:rgba(15,23,42,0.72);
+}
+
+.statusDot{
+  width:8px;
+  height:8px;
+  border-radius:999px;
+  background:rgba(15,23,42,0.26);
+  transition:background .16s ease, box-shadow .16s ease;
+}
+
+.status.is-busy .statusDot{
+  background:rgba(79,70,229,0.9);
+  box-shadow:0 0 0 6px rgba(79,70,229,0.10);
+}
+
+.status.is-done .statusDot{
+  background:rgba(22,163,74,0.95);
+  box-shadow:0 0 0 6px rgba(22,163,74,0.10);
+}
+
+.status.is-error .statusDot{
+  background:rgba(245,158,11,0.95);
+  box-shadow:0 0 0 6px rgba(245,158,11,0.10);
 }
 
 .resultHead{
-display:flex;
-align-items:center;
-justify-content:space-between;
-margin-bottom:10px;
-gap:12px;
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  margin-bottom:12px;
+  gap:14px;
+}
+
+.resultTitleGroup{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
 }
 
 .pre{
-margin:0;
-border-radius:16px;
-border:1px solid rgba(15,23,42,0.12);
-background:#ffffff;
-color:#0f172a;
-padding:20px;
-min-height:320px;
-max-height:650px;
-overflow:auto;
-font-size:14px;
-line-height:1.65;
-font-family:Inter,system-ui;
-white-space:normal;
+  margin:0;
+  border-radius:20px;
+  border:1px solid rgba(15,23,42,0.10);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.98), rgba(252,252,255,0.98));
+  color:#0f172a;
+  padding:22px;
+  min-height:640px;
+  max-height:780px;
+  overflow:auto;
+  font-size:14px;
+  line-height:1.68;
+  font-family:Inter,system-ui,sans-serif;
+  white-space:normal;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.7);
+  scrollbar-width:thin;
+  scrollbar-color:rgba(15,23,42,0.18) transparent;
+}
+
+.pre::-webkit-scrollbar{
+  width:10px;
+}
+
+.pre::-webkit-scrollbar-track{
+  background:transparent;
+}
+
+.pre::-webkit-scrollbar-thumb{
+  background:rgba(15,23,42,0.14);
+  border-radius:999px;
+  border:2px solid transparent;
+  background-clip:padding-box;
 }
 
 .pre h3{
-margin:16px 0 8px;
-font-size:13px;
-letter-spacing:.06em;
-text-transform:uppercase;
-color:rgba(15,23,42,0.65);
+  margin:18px 0 8px;
+  font-size:12px;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:rgba(15,23,42,0.56);
+  font-weight:800;
 }
 
 .pre p{
-margin:0 0 10px;
+  margin:0 0 12px;
 }
 
 .pre ul{
-margin:6px 0 12px 18px;
-padding:0;
+  margin:8px 0 14px 18px;
+  padding:0;
 }
 
 .pre li{
-margin:6px 0;
+  margin:7px 0;
 }
 
 .pre .muted{
-color:rgba(15,23,42,0.60);
+  color:rgba(15,23,42,0.60);
 }
 
 .pre .divider{
-height:1px;
-background:rgba(15,23,42,0.10);
-margin:12px 0;
+  height:1px;
+  background:linear-gradient(90deg, rgba(15,23,42,0.10), rgba(15,23,42,0.04));
+  margin:14px 0;
 }
 
 .summaryBox{
-border:1px solid rgba(15,23,42,0.08);
-background:rgba(79,70,229,0.03);
-border-radius:14px;
-padding:14px 14px 6px;
+  border:1px solid rgba(15,23,42,0.08);
+  background:
+    linear-gradient(180deg, rgba(79,70,229,0.04), rgba(124,58,237,0.025));
+  border-radius:18px;
+  padding:16px 16px 8px;
 }
 
 .factGrid{
-display:grid;
-grid-template-columns:1fr 1fr;
-gap:10px 18px;
-margin-top:12px;
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px 18px;
+  margin-top:12px;
 }
 
 .factItem{
-font-size:13px;
+  font-size:13px;
+  padding:10px 0;
+  border-bottom:1px solid rgba(15,23,42,0.06);
 }
 
 .factItem b{
-display:block;
-font-size:12px;
-color:rgba(15,23,42,0.58);
-margin-bottom:3px;
-text-transform:uppercase;
-letter-spacing:.04em;
+  display:block;
+  font-size:11px;
+  color:rgba(15,23,42,0.54);
+  margin-bottom:4px;
+  text-transform:uppercase;
+  letter-spacing:.06em;
 }
 
 .metaCard{
-margin-top:14px;
-border:1px solid rgba(15,23,42,0.10);
-border-radius:16px;
-background:white;
-padding:14px;
+  margin-top:14px;
+  border:1px solid rgba(15,23,42,0.08);
+  border-radius:18px;
+  background:rgba(255,255,255,0.96);
+  padding:15px 15px 12px;
+  box-shadow:var(--shadow3);
 }
 
 .metaCard h3{
-margin:0 0 10px;
-font-size:13px;
-letter-spacing:.06em;
-text-transform:uppercase;
-color:rgba(15,23,42,0.65);
+  margin:0 0 10px;
+  font-size:13px;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:rgba(15,23,42,0.62);
+  font-weight:800;
 }
 
 .metaCard .metaMuted{
-font-size:12px;
-color:var(--muted);
+  font-size:12px;
+  color:var(--muted);
 }
 
 .overviewList{
-display:grid;
-gap:8px;
-margin-top:10px;
+  display:grid;
+  gap:0;
+  margin-top:10px;
 }
 
 .overviewRow{
-display:flex;
-justify-content:space-between;
-gap:10px;
-font-size:13px;
-padding:8px 0;
-border-bottom:1px solid rgba(15,23,42,0.06);
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+  font-size:13px;
+  padding:11px 0;
+  border-bottom:1px solid rgba(15,23,42,0.06);
 }
 
 .overviewRow:last-child{
-border-bottom:0;
+  border-bottom:0;
 }
 
 .overviewLabel{
-color:rgba(15,23,42,0.78);
-font-weight:600;
+  color:rgba(15,23,42,0.78);
+  font-weight:600;
 }
 
 .overviewValue{
-display:flex;
-align-items:center;
-gap:8px;
-font-weight:700;
-color:rgba(15,23,42,0.88);
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-weight:700;
+  color:rgba(15,23,42,0.88);
 }
 
 .tick{
-display:inline-flex;
-align-items:center;
-justify-content:center;
-width:18px;
-height:18px;
-border-radius:999px;
-font-size:11px;
-font-weight:800;
-border:1px solid rgba(15,23,42,0.12);
-background:white;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:18px;
+  height:18px;
+  border-radius:999px;
+  font-size:11px;
+  font-weight:800;
+  border:1px solid rgba(15,23,42,0.12);
+  background:white;
+  box-shadow:0 1px 2px rgba(15,23,42,0.05);
 }
 
 .tick.ok{
-border-color:rgba(22,163,74,0.30);
-color:rgba(22,163,74,0.95);
+  border-color:rgba(22,163,74,0.28);
+  color:rgba(22,163,74,0.95);
 }
 
 .tick.no{
-border-color:rgba(245,158,11,0.35);
-color:rgba(245,158,11,0.95);
+  border-color:rgba(245,158,11,0.32);
+  color:rgba(245,158,11,0.95);
 }
 
 .quickFacts{
-display:grid;
-gap:8px;
-margin-top:10px;
+  display:grid;
+  gap:0;
+  margin-top:8px;
 }
 
 .quickFact{
-font-size:13px;
-padding:8px 0;
-border-bottom:1px solid rgba(15,23,42,0.06);
+  font-size:13px;
+  padding:11px 0;
+  border-bottom:1px solid rgba(15,23,42,0.06);
 }
 
 .quickFact:last-child{
-border-bottom:0;
+  border-bottom:0;
 }
 
 .quickFact b{
-display:block;
-font-size:11px;
-letter-spacing:.04em;
-text-transform:uppercase;
-color:rgba(15,23,42,0.58);
-margin-bottom:2px;
+  display:block;
+  font-size:11px;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  color:rgba(15,23,42,0.54);
+  margin-bottom:4px;
 }
 
 .footer{
-margin-top:14px;
-display:flex;
-justify-content:space-between;
-font-size:12px;
-color:var(--muted);
+  margin-top:14px;
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+  font-size:12px;
+  color:var(--muted);
 }
 
 .kbd{
-font-family:ui-monospace;
-font-size:11px;
-padding:2px 6px;
-border-radius:8px;
-border:1px solid rgba(15,23,42,0.12);
-background:white;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:11px;
+  padding:3px 7px;
+  border-radius:8px;
+  border:1px solid rgba(15,23,42,0.10);
+  background:white;
 }
 
 .pill{
-font-size:12px;
-padding:4px 10px;
-border-radius:999px;
-border:1px solid rgba(15,23,42,0.12);
-background:white;
-color:rgba(15,23,42,0.72);
-font-weight:800;
-}
-
-hr.sep{
-border:0;
-border-top:1px solid rgba(15,23,42,0.10);
-margin:14px 0;
+  font-size:12px;
+  padding:5px 10px;
+  border-radius:999px;
+  border:1px solid rgba(15,23,42,0.10);
+  background:rgba(255,255,255,0.96);
+  color:rgba(15,23,42,0.72);
+  font-weight:800;
+  letter-spacing:-0.01em;
 }
 
 .small{
-font-size:12px;
-color:var(--muted);
+  font-size:12px;
+  color:var(--muted);
 }
 
 .badge{
-display:inline-block;
-padding:2px 8px;
-border:1px solid rgba(15,23,42,0.12);
-border-radius:999px;
-font-size:12px;
-font-weight:800;
-background:white;
-color:rgba(15,23,42,0.75);
+  display:inline-block;
+  padding:3px 8px;
+  border:1px solid rgba(15,23,42,0.10);
+  border-radius:999px;
+  font-size:11px;
+  font-weight:800;
+  background:white;
+  color:rgba(15,23,42,0.75);
+  letter-spacing:.03em;
 }
 
-.badge.ok{ border-color:rgba(22,163,74,0.30); color:rgba(22,163,74,0.90); }
-.badge.warn{ border-color:rgba(245,158,11,0.35); color:rgba(245,158,11,0.95); }
+.badge.ok{ border-color:rgba(22,163,74,0.28); color:rgba(22,163,74,0.90); }
+.badge.warn{ border-color:rgba(245,158,11,0.32); color:rgba(245,158,11,0.95); }
 
 @media (max-width:980px){
-.grid{grid-template-columns:1fr}
-.factGrid{grid-template-columns:1fr}
-.resultHead{align-items:flex-start;flex-direction:column}
+  .wrap{padding:26px 14px 56px}
+  .grid{grid-template-columns:1fr}
+  .factGrid{grid-template-columns:1fr}
+  .resultHead{align-items:flex-start;flex-direction:column}
+  .dropzone{flex-direction:column;align-items:flex-start}
+  .fileCount{text-align:left;min-width:0}
+  .footer{flex-direction:column;align-items:flex-start}
+  .pre{min-height:440px;max-height:none}
+}
+
+@media (max-width:640px){
+  .shell{padding:14px}
+  .panel{padding:16px}
+  .brand{align-items:flex-start}
+  .brand h1{font-size:26px}
 }
 </style>
 </head>
@@ -431,103 +587,102 @@ color:rgba(15,23,42,0.75);
 
 <div class="wrap">
 
-<header class="top">
-<div class="brand">
+  <header class="top">
+    <div class="brand">
+      <div class="logoWrap">
+        <img class="logoImg" src="/static/logo-new.png" alt="Logo">
+      </div>
 
-<div class="logoWrap">
-<img class="logoImg" src="/static/logo-new.png" alt="Logo">
-</div>
+      <div>
+        <h1>Lawmens Tender Pack Summary</h1>
+        <p>Upload a tender pack → get an instant pack breakdown</p>
+      </div>
+    </div>
+  </header>
 
-<div>
-<h1>Lawmens Tender Pack Summary</h1>
-<p>Upload a tender pack → get an instant pack breakdown</p>
-</div>
+  <div class="shell">
+    <div class="grid">
 
-</div>
-</header>
+      <!-- LEFT -->
+      <section class="panel">
 
-<div class="shell">
-<div class="grid">
+        <div class="row" style="justify-content:space-between;">
+          <h2>Upload</h2>
+          <span class="pill">Step 1</span>
+        </div>
 
-<!-- LEFT -->
-<section class="panel">
+        <p class="hint">
+          Upload tender files (ZIP, PDFs, Excel, Word, images) and we'll scan what's inside.
+        </p>
 
-<div class="row" style="justify-content:space-between;">
-<h2>Upload</h2>
-<span class="pill">Step 1</span>
-</div>
+        <div class="upload">
 
-<p class="hint">
-Upload tender files (ZIP, PDFs, Excel, Word, images) and we'll scan what's inside.
-</p>
+          <input id="zip" class="hiddenInput" type="file" multiple webkitdirectory directory>
 
-<div class="upload">
+          <div id="dropzone" class="dropzone">
+            <div class="dropzoneMain">
+              <span class="dropzoneTitle">Click to upload (or drag and drop)</span>
+              <span class="dropzoneSub">Folders and multiple tender files supported</span>
+            </div>
+            <span id="fileName" class="fileCount">No file selected</span>
+          </div>
 
-<input id="zip" class="hiddenInput" type="file" multiple webkitdirectory directory>
+          <div class="row" style="margin-top:14px;justify-content:space-between;">
+            <button id="btn" class="btn" onclick="uploadZip()">Analyse</button>
 
-<div id="dropzone" class="dropzone">
-<span>Click to upload (or drag and drop)</span>
-<span id="fileName">No file selected</span>
-</div>
+            <div id="statusWrap" class="status">
+              <span class="statusDot"></span>
+              <span id="status">Idle</span>
+            </div>
+          </div>
 
-<div class="row" style="margin-top:12px;justify-content:space-between;">
-<button id="btn" class="btn" onclick="uploadZip()">Analyse</button>
+          <div id="packOverviewCard" class="metaCard" style="display:none;">
+            <h3>Pack Overview</h3>
+            <div class="metaMuted" id="packOverviewMeta">No pack analysed yet.</div>
+            <div id="packOverviewRows" class="overviewList"></div>
+          </div>
 
-<div class="status">
-<span id="status">Idle</span>
-</div>
+          <div id="quickFactsCard" class="metaCard" style="display:none;">
+            <h3>Quick Tender Facts</h3>
+            <div id="quickFactsRows" class="quickFacts"></div>
+          </div>
 
-</div>
+        </div>
 
-<div id="packOverviewCard" class="metaCard" style="display:none;">
-<h3>Pack Overview</h3>
-<div class="metaMuted" id="packOverviewMeta">No pack analysed yet.</div>
-<div id="packOverviewRows" class="overviewList"></div>
-</div>
+      </section>
 
-<div id="quickFactsCard" class="metaCard" style="display:none;">
-<h3>Quick Tender Facts</h3>
-<div id="quickFactsRows" class="quickFacts"></div>
-</div>
+      <!-- RIGHT -->
+      <section class="panel">
 
-</div>
+        <div class="resultHead">
+          <div class="resultTitleGroup">
+            <h2>Tender Pack Report</h2>
+            <span class="pill">Step 2</span>
+          </div>
 
-</section>
+          <div class="row">
+            <button class="btn secondary" onclick="downloadPdf()" id="downloadPdfBtn" disabled>
+              Download PDF
+            </button>
+            <button class="btn secondary" onclick="downloadJson()" id="downloadBtn" disabled>
+              Download JSON
+            </button>
+          </div>
+        </div>
 
-<!-- RIGHT -->
-<section class="panel">
+        <div id="out" class="pre">
+          Upload files to generate a tender pack briefing.
+        </div>
 
-<div class="resultHead">
+        <div class="footer">
+          <span>Status updates appear top-left</span>
+          <span>Endpoint: <span class="kbd">/api/analyse</span></span>
+        </div>
 
-<div class="row" style="gap:10px;">
-<h2 style="margin:0;">Tender Pack Report</h2>
-<span class="pill">Step 2</span>
-</div>
+      </section>
 
-<div class="row">
-<button class="btn secondary" onclick="downloadPdf()" id="downloadPdfBtn" disabled>
-Download PDF
-</button>
-<button class="btn secondary" onclick="downloadJson()" id="downloadBtn" disabled>
-Download JSON
-</button>
-</div>
-
-</div>
-
-<div id="out" class="pre">
-Upload files to generate a tender pack briefing.
-</div>
-
-<div class="footer">
-<span>Status updates appear top-left</span>
-<span>Endpoint: <span class="kbd">/api/analyse</span></span>
-</div>
-
-</section>
-
-</div>
-</div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -537,6 +692,7 @@ Upload files to generate a tender pack briefing.
   const nameEl = document.getElementById("fileName");
   const out = document.getElementById("out");
   const statusEl = document.getElementById("status");
+  const statusWrap = document.getElementById("statusWrap");
   const downloadBtn = document.getElementById("downloadBtn");
   const downloadPdfBtn = document.getElementById("downloadPdfBtn");
   const packOverviewCard = document.getElementById("packOverviewCard");
@@ -547,6 +703,12 @@ Upload files to generate a tender pack briefing.
 
   let currentReport = null;
 
+  function setStatus(text, mode) {
+    statusEl.textContent = text || "Idle";
+    statusWrap.classList.remove("is-busy", "is-done", "is-error");
+    if (mode) statusWrap.classList.add(mode);
+  }
+
   dz.onclick = () => input.click();
 
   input.addEventListener("change", () => {
@@ -554,7 +716,7 @@ Upload files to generate a tender pack briefing.
       nameEl.textContent = "No file selected";
       return;
     }
-    nameEl.textContent = input.files.length + " files selected";
+    nameEl.textContent = input.files.length + (input.files.length === 1 ? " file selected" : " files selected");
   });
 
   dz.addEventListener("dragover", (e) => {
@@ -568,7 +730,7 @@ Upload files to generate a tender pack briefing.
       dt.items.add(f);
     }
     input.files = dt.files;
-    nameEl.textContent = input.files.length + " files selected";
+    nameEl.textContent = input.files.length + (input.files.length === 1 ? " file selected" : " files selected");
   });
 
   const esc = (x) =>
@@ -675,7 +837,7 @@ Upload files to generate a tender pack briefing.
 
       if (!Object.keys(b).length) {
         out.innerHTML =
-          `<h3>Tender pack report</h3>` +
+          `<h3>Tender Pack Report</h3>` +
           `<div class="divider"></div>` +
           `<div>This JSON doesn't contain a <b>briefing</b> section yet.</div>` +
           `<div class="muted" style="margin-top:10px;">Make sure your backend returns <b>report.briefing</b> and refresh/re-upload.</div>`;
@@ -685,7 +847,8 @@ Upload files to generate a tender pack briefing.
       out.innerHTML = `
         <div class="summaryBox">
           <h3 style="margin-top:0">Summary Page</h3>
-          <p>${esc(b.overview || b.executive_summary || "No summary returned.")}</p>
+          <p>${esc(b.executive_summary || b.overview || "No summary returned.")}</p>
+          <p>${esc(b.overview || "")}</p>
           <p>${esc(b.commercial_summary || "")}</p>
           <p>${esc(b.programme_access_summary || "")}</p>
           <p>${esc(b.risk_summary || "")}</p>
@@ -763,7 +926,7 @@ Upload files to generate a tender pack briefing.
     if (!currentReport) return;
 
     try {
-      statusEl.textContent = "Building PDF…";
+      setStatus("Building PDF…", "is-busy");
       downloadPdfBtn.disabled = true;
 
       const res = await fetch("/api/report/pdf", {
@@ -788,9 +951,9 @@ Upload files to generate a tender pack briefing.
       a.download = "tender-summary.pdf";
       a.click();
       URL.revokeObjectURL(url);
-      statusEl.textContent = "PDF ready";
+      setStatus("PDF ready", "is-done");
     } catch (err) {
-      statusEl.textContent = "PDF error";
+      setStatus("PDF error", "is-error");
       alert(String(err));
     } finally {
       downloadPdfBtn.disabled = false;
@@ -813,12 +976,12 @@ Upload files to generate a tender pack briefing.
     }
 
     if (!input.files.length) {
-      statusEl.textContent = "Select files first";
+      setStatus("Select files first", "is-error");
       return;
     }
 
     try {
-      statusEl.textContent = "Uploading and analysing…";
+      setStatus("Uploading and analysing…", "is-busy");
       out.textContent = "Analysing tender pack…";
 
       const formData = new FormData();
@@ -841,10 +1004,10 @@ Upload files to generate a tender pack briefing.
       }
 
       window.renderTenderReport(data);
-      statusEl.textContent = "Done";
+      setStatus("Done", "is-done");
     } catch (err) {
       out.textContent = "Request failed: " + err;
-      statusEl.textContent = "Error";
+      setStatus("Error", "is-error");
     }
   };
 })();
