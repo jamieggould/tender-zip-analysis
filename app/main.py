@@ -37,13 +37,15 @@ templates = Jinja2Templates(directory="templates")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
-OPENAI_TIMEOUT_SEC = float(os.getenv("OPENAI_TIMEOUT_SEC", "18"))
+OPENAI_TIMEOUT_SEC = float(os.getenv("OPENAI_TIMEOUT_SEC", "45"))
+OPENAI_SOURCE_TEXT_MAX_CHARS = int(os.getenv("OPENAI_SOURCE_TEXT_MAX_CHARS", "120000"))
+
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-PDF_MAX_PAGES = 14
-DOCX_MAX_PARAS = 280
-DOCX_MAX_TABLES = 30
-DOCX_MAX_TABLE_ROWS = 140
+PDF_MAX_PAGES = 18
+DOCX_MAX_PARAS = 320
+DOCX_MAX_TABLES = 40
+DOCX_MAX_TABLE_ROWS = 180
 MAX_FILES_TO_PROCESS = 2500
 MAX_FILE_BYTES = 300 * 1024 * 1024
 
@@ -89,16 +91,16 @@ DATE_PATTERNS = [
 ]
 
 TENDER_RETURN_PATTERNS = [
-    r"(tender|return|submit|submission)\s+(date|deadline|by)\s*[:\-]?\s*([^\n]{0,160})",
-    r"\b(closing date|deadline)\b\s*[:\-]?\s*([^\n]{0,160})",
+    r"(tender|return|submit|submission)\s+(date|deadline|by)\s*[:\-]?\s*([^\n]{0,180})",
+    r"\b(closing date|deadline)\b\s*[:\-]?\s*([^\n]{0,180})",
 ]
 SUBMISSION_PATTERNS = [
-    r"\b(submit|submission|return)\b.{0,140}\b(email|e-mail|portal|upload|address)\b.{0,140}",
+    r"\b(submit|submission|return)\b.{0,180}\b(email|e-mail|portal|upload|address)\b.{0,180}",
     r"\b(email)\b\s*[:\-]?\s*([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})",
 ]
 LD_PATTERNS = [
     r"(liquidated damages|LDs?|LADs?)\s*[:\-]?\s*(£\s?\d[\d,]*\.?\d*)",
-    r"(liquidated damages|LDs?|LADs?).{0,100}(£\s?\d[\d,]*\.?\d*)",
+    r"(liquidated damages|LDs?|LADs?).{0,120}(£\s?\d[\d,]*\.?\d*)",
 ]
 RETENTION_PATTERNS = [
     r"(retention)\s*[:\-]?\s*(\d{1,2}(\.\d+)?\s*%)",
@@ -109,15 +111,15 @@ PROGRAMME_PATTERNS = [
     r"(\d{1,3})\s*(weeks?|months?)\s*(programme|duration|contract period)",
 ]
 WORKING_HOURS_PATTERNS = [
-    r"(working hours|site hours|hours of work)\s*[:\-]?\s*([^\n]{0,220})",
-    r"(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?).{0,80}(\d{1,2}[:.]\d{2}).{0,40}(\d{1,2}[:.]\d{2})",
+    r"(working hours|site hours|hours of work)\s*[:\-]?\s*([^\n]{0,240})",
+    r"(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?).{0,100}(\d{1,2}[:.]\d{2}).{0,50}(\d{1,2}[:.]\d{2})",
 ]
 INSURANCE_PATTERNS = [
-    r"\b(public liability|employers liability|EL|PL)\b.{0,140}(£\s?\d[\d,]*\.?\d*)",
-    r"\b(insurance)\b.{0,180}(£\s?\d[\d,]*\.?\d*)",
+    r"\b(public liability|employers liability|EL|PL)\b.{0,180}(£\s?\d[\d,]*\.?\d*)",
+    r"\b(insurance)\b.{0,220}(£\s?\d[\d,]*\.?\d*)",
 ]
 ACCREDITATION_PATTERNS = [
-    r"\b(CHAS|SMAS|SafeContractor|Constructionline|ISO\s?9001|ISO\s?14001|ISO\s?45001)\b.{0,180}",
+    r"\b(CHAS|SMAS|SafeContractor|Constructionline|ISO\s?9001|ISO\s?14001|ISO\s?45001)\b.{0,220}",
 ]
 
 REQ_STRICT_RE = re.compile(r"\b(must|shall|required|mandatory|as a minimum|minimum of|no later than)\b", re.I)
@@ -154,6 +156,10 @@ def _safe_json_loads(s: str) -> dict[str, Any] | None:
         return None
 
 
+def _normalize_line(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "")).strip()
+
+
 def _trim_list(items: Any, limit: int = 10, width: int = 320) -> list[str]:
     if not isinstance(items, list):
         return []
@@ -186,10 +192,6 @@ def _clean_text(s: str) -> str:
     return s.strip()
 
 
-def _normalize_line(s: str) -> str:
-    return re.sub(r"\s+", " ", (s or "")).strip()
-
-
 def _looks_irrelevant(text: str) -> bool:
     tl = (text or "").lower()
     return any(h in tl for h in IRRELEVANT_DOC_HINTS)
@@ -205,7 +207,7 @@ def _looks_like_schedule_row(s: str) -> bool:
     if len(tokens) >= 5:
         return True
     digits = sum(1 for c in s2 if c.isdigit())
-    if digits >= 18 and len(s2) < 140:
+    if digits >= 18 and len(s2) < 160:
         return True
     return False
 
@@ -301,36 +303,8 @@ def _is_supported_upload(filename: str) -> bool:
     return True
 
 
-def _build_ai_payload(briefing: dict[str, Any]) -> dict[str, Any]:
-    evidence = briefing.get("evidence") or {}
-
-    compact_evidence = {
-        "tender_return_candidates": _trim_list(evidence.get("tender_return_candidates"), 3, 260),
-        "submission_candidates": _trim_list(evidence.get("submission_candidates"), 3, 260),
-        "programme_candidates": _trim_list(evidence.get("programme_candidates"), 3, 260),
-        "working_hours_candidates": _trim_list(evidence.get("working_hours_candidates"), 3, 260),
-        "retention_candidates": _trim_list(evidence.get("retention_candidates"), 3, 260),
-        "liquidated_damages_candidates": _trim_list(evidence.get("liquidated_damages_candidates"), 3, 260),
-        "insurance_candidates": _trim_list(evidence.get("insurance_candidates"), 3, 260),
-        "accreditations_candidates": _trim_list(evidence.get("accreditations_candidates"), 3, 220),
-    }
-
-    return {
-        "overview": briefing.get("overview", ""),
-        "commercial_summary": briefing.get("commercial_summary", ""),
-        "programme_access_summary": briefing.get("programme_access_summary", ""),
-        "risk_summary": briefing.get("risk_summary", ""),
-        "submission_summary": briefing.get("submission_summary", ""),
-        "key_facts": briefing.get("key_facts", {}),
-        "dates_found": briefing.get("dates_found", [])[:10],
-        "constraints": briefing.get("constraints", [])[:8],
-        "requirements_strict": briefing.get("requirements_strict", [])[:10],
-        "requirements_loose": briefing.get("requirements_loose", [])[:8],
-        "pricing_watchouts": briefing.get("pricing_watchouts", [])[:8],
-        "clarifications": briefing.get("clarifications", [])[:8],
-        "missing": briefing.get("missing", [])[:8],
-        "evidence": compact_evidence,
-    }
+def _should_skip_ai(_: dict[str, Any]) -> bool:
+    return not openai_client
 
 
 def safe_extract_zip(zip_path: Path, extract_to: Path, max_files: int = 5000) -> list[Path]:
@@ -574,7 +548,7 @@ def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, An
         info["date_candidates"] = sorted(dates)[:30]
 
         info["snippet"] = text[:1200]
-        info["text"] = text[:24000]
+        info["text"] = text[:28000]
         info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
@@ -618,7 +592,7 @@ def extract_docx_info(path: Path, max_paras: int = DOCX_MAX_PARAS) -> dict[str, 
         info["keyword_hits"] = dict(sorted(hits.items(), key=lambda x: x[1], reverse=True)[:25])
 
         info["snippet"] = text[:1200]
-        info["text"] = text[:24000]
+        info["text"] = text[:28000]
         info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
@@ -655,7 +629,7 @@ def extract_xlsx_info(path: Path) -> dict[str, Any]:
         for name in wb.sheetnames[:20]:
             ws = wb[name]
             rows: list[list[str]] = []
-            for r in ws.iter_rows(min_row=1, max_row=40, values_only=True):
+            for r in ws.iter_rows(min_row=1, max_row=60, values_only=True):
                 rows.append([("" if v is None else str(v)).strip() for v in r][:30])
 
             header = rows[0] if rows else []
@@ -665,7 +639,7 @@ def extract_xlsx_info(path: Path) -> dict[str, Any]:
                 "name": name,
                 "header_guess": header[:20],
                 "boq_column_map": colmap,
-                "preview_rows": rows[:8],
+                "preview_rows": rows[:12],
             })
 
     except Exception as e:
@@ -682,13 +656,13 @@ def extract_csv_info(path: Path) -> dict[str, Any]:
             rows: list[list[str]] = []
             for i, r in enumerate(reader):
                 rows.append([c.strip() for c in r][:30])
-                if i >= 30:
+                if i >= 40:
                     break
 
         header = rows[0] if rows else []
         info["header_guess"] = header[:20]
         info["boq_column_map"] = detect_boq_columns(header) if header else {}
-        info["preview_rows"] = rows[:8]
+        info["preview_rows"] = rows[:12]
 
     except Exception as e:
         info["error"] = f"CSV read failed: {e}"
@@ -733,7 +707,7 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
             strict_reqs.extend(req.get("strict", []) or [])
             loose_reqs.extend(req.get("loose", []) or [])
 
-    merged = "\n\n".join(text_blobs)[:180000]
+    merged = "\n\n".join(text_blobs)[:200000]
     merged_lc = merged.lower()
 
     tender_return = _find_evidence(merged, TENDER_RETURN_PATTERNS, max_items=10)
@@ -920,29 +894,91 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
     }
 
 
-def ai_enhance_briefing(briefing: dict[str, Any]) -> dict[str, Any]:
+def collect_extracted_text(sections: dict[str, list[dict[str, Any]]], max_chars: int = OPENAI_SOURCE_TEXT_MAX_CHARS) -> str:
+    parts: list[str] = []
+
+    for cat in ["forms", "prelims", "addenda", "specs", "documents", "pdfs", "boq", "registers", "spreadsheets"]:
+        for item in sections.get(cat, []):
+            ex = item.get("extracted") or {}
+            file_name = item.get("file") or "unknown file"
+
+            text = ex.get("text")
+            if isinstance(text, str) and text.strip():
+                clean = _clean_text(text)
+                if clean and not _looks_irrelevant(clean[:1200]):
+                    parts.append(f"FILE: {file_name}\n{clean}")
+
+            for sh in ex.get("sheets", [])[:10] if isinstance(ex.get("sheets"), list) else []:
+                if not isinstance(sh, dict):
+                    continue
+                sheet_name = sh.get("name") or "Sheet"
+                header = sh.get("header_guess") or []
+                preview = sh.get("preview_rows") or []
+                lines: list[str] = []
+                if header:
+                    lines.append("HEADER: " + " | ".join(str(x) for x in header[:20]))
+                for row in preview[:10]:
+                    if isinstance(row, list) and any(str(x).strip() for x in row):
+                        lines.append("ROW: " + " | ".join(str(x) for x in row[:20]))
+                if lines:
+                    parts.append(f"FILE: {file_name}\nSHEET: {sheet_name}\n" + "\n".join(lines))
+
+    merged = "\n\n".join(parts)
+    return merged[:max_chars]
+
+
+def ai_enhance_briefing(briefing: dict[str, Any], source_text: str) -> dict[str, Any]:
     if not openai_client:
         return briefing
 
-    payload = _build_ai_payload(briefing)
+    source_text = (source_text or "").strip()
+    if not source_text:
+        return briefing
+
+    payload = {
+        "briefing_seed": {
+            "title": briefing.get("title", "Tender Pack Summary"),
+            "executive_summary": briefing.get("executive_summary", ""),
+            "overview": briefing.get("overview", ""),
+            "commercial_summary": briefing.get("commercial_summary", ""),
+            "programme_access_summary": briefing.get("programme_access_summary", ""),
+            "risk_summary": briefing.get("risk_summary", ""),
+            "submission_summary": briefing.get("submission_summary", ""),
+            "key_facts": briefing.get("key_facts", {}),
+            "dates_found": briefing.get("dates_found", [])[:20],
+            "constraints": briefing.get("constraints", [])[:20],
+            "requirements_strict": briefing.get("requirements_strict", [])[:20],
+            "requirements_loose": briefing.get("requirements_loose", [])[:20],
+            "pricing_watchouts": briefing.get("pricing_watchouts", [])[:20],
+            "clarifications": briefing.get("clarifications", [])[:20],
+            "missing": briefing.get("missing", [])[:20],
+        },
+        "source_text": source_text,
+    }
 
     system_prompt = """
-You are a senior UK construction estimator reviewing a tender pack.
+You are a senior UK construction estimator preparing a professional client-facing tender summary.
 
-You will receive extracted evidence from tender documents.
-Turn it into a clean, practical tender summary page that reads like a report, not like notes.
+You will receive:
+1. A rough machine-generated seed summary.
+2. Raw extracted text from uploaded tender documents.
 
-Rules:
-- Use ONLY the provided evidence.
-- Ignore broken fragments or anything unclear.
-- Do NOT mention file names, sources, or "the evidence says".
-- Write clearly and commercially.
-- Expand each section into useful plain English, but stay concise.
-- Prioritise deadline, submission route, programme, access, working hours, LDs, retention, insurance, permits, asbestos, isolations, waste, temporary works.
-- Only keep requirements that matter to pricing, delivery, risk, logistics, compliance, or tender submission.
-- If a date looks suspicious or unsupported, do not overstate it.
-- Do not combine unrelated fragments into one sentence.
-- Prefer short, readable sentences over dense wording.
+Your task:
+Rewrite everything into a polished, professional, commercially useful summary suitable to show to a client.
+
+Critical rules:
+- Use only the information supported by the supplied material.
+- Write in clean, natural, professional English.
+- Do NOT copy broken OCR fragments, numbering strings, table noise, repeated fragments, or malformed schedule rows.
+- Ignore gibberish, partial clauses, duplicated wording, and extraction artefacts.
+- Prefer clarity over completeness.
+- If a point is unclear or weakly supported, omit it.
+- Do NOT mention filenames, OCR, extraction issues, regex, prompts, models, or source processing.
+- Do NOT output rough notes.
+- Rephrase into proper prose and concise useful bullet points where suitable.
+- Focus on commercially relevant issues: deadline, submission route, programme, working hours, access, LDs, retention, insurance, accreditations, key risks, logistics, permits, asbestos, isolations, temporary works, waste, and clarifications.
+- Keep requirements only if they affect pricing, delivery, logistics, compliance, tender return, or commercial risk.
+- If exact figures are unclear, do not invent them.
 
 Return STRICT JSON with this exact structure:
 {
@@ -975,8 +1011,8 @@ Return STRICT JSON with this exact structure:
     try:
         resp = openai_client.chat.completions.create(
             model=OPENAI_MODEL,
-            temperature=0.1,
-            timeout=OPENAI_TIMEOUT_SEC,
+            temperature=0.0,
+            timeout=max(OPENAI_TIMEOUT_SEC, 45),
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -991,12 +1027,12 @@ Return STRICT JSON with this exact structure:
 
         enhanced = {
             "title": parsed.get("title") or briefing.get("title") or "Tender Pack Summary",
-            "executive_summary": parsed.get("executive_summary") or briefing.get("executive_summary"),
-            "overview": parsed.get("overview") or briefing.get("overview"),
-            "commercial_summary": parsed.get("commercial_summary") or briefing.get("commercial_summary"),
-            "programme_access_summary": parsed.get("programme_access_summary") or briefing.get("programme_access_summary"),
-            "risk_summary": parsed.get("risk_summary") or briefing.get("risk_summary"),
-            "submission_summary": parsed.get("submission_summary") or briefing.get("submission_summary"),
+            "executive_summary": parsed.get("executive_summary") or briefing.get("executive_summary") or "",
+            "overview": parsed.get("overview") or briefing.get("overview") or "",
+            "commercial_summary": parsed.get("commercial_summary") or briefing.get("commercial_summary") or "",
+            "programme_access_summary": parsed.get("programme_access_summary") or briefing.get("programme_access_summary") or "",
+            "risk_summary": parsed.get("risk_summary") or briefing.get("risk_summary") or "",
+            "submission_summary": parsed.get("submission_summary") or briefing.get("submission_summary") or "",
             "pricing_watchouts": _trim_list(parsed.get("pricing_watchouts"), 10, 340) or briefing.get("pricing_watchouts", []),
             "clarifications": _trim_list(parsed.get("clarifications"), 10, 340) or briefing.get("clarifications", []),
             "key_facts": {
@@ -1020,7 +1056,10 @@ Return STRICT JSON with this exact structure:
         }
         return enhanced
 
-    except Exception:
+    except Exception as e:
+        print("OPENAI ENHANCE ERROR:")
+        traceback.print_exc()
+        print(e)
         return briefing
 
 
@@ -1084,7 +1123,10 @@ def build_pdf_report(report: dict[str, Any]) -> bytes:
     story.append(Spacer(1, 4 * mm))
 
     story.append(Paragraph("Executive Summary", styles["SectionHead"]))
-    add_paragraph(briefing.get("overview") or briefing.get("executive_summary") or "")
+    add_paragraph(briefing.get("executive_summary") or briefing.get("overview") or "")
+
+    story.append(Paragraph("Overview", styles["SectionHead"]))
+    add_paragraph(briefing.get("overview") or "")
 
     story.append(Paragraph("Commercial Summary", styles["SectionHead"]))
     add_paragraph(briefing.get("commercial_summary") or "")
@@ -1268,7 +1310,8 @@ async def analyse(
                 return len(sections.get(cat, [])) > 0
 
             raw_briefing = extract_pack_briefing(sections)
-            briefing = ai_enhance_briefing(raw_briefing)
+            source_text = collect_extracted_text(sections)
+            briefing = ai_enhance_briefing(raw_briefing, source_text)
 
             _strip_internal_fields(sections)
 
@@ -1288,7 +1331,9 @@ async def analyse(
                     "addenda_found": has_cat("addenda"),
                     "ai_enabled": bool(openai_client),
                     "ai_model": OPENAI_MODEL if openai_client else None,
+                    "ai_skipped": bool(openai_client) and not bool(briefing.get("ai_used")),
                     "ai_used": bool(briefing.get("ai_used")),
+                    "source_text_sent_to_ai": bool(source_text and openai_client),
                 },
                 "briefing": briefing,
                 "sections": dict(sections),
