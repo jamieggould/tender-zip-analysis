@@ -1,26 +1,32 @@
 from __future__ import annotations
 
+import csv
+import io
+import json
 import os
 import re
-import csv
-import json
 import shutil
 import tempfile
 import zipfile
-from pathlib import Path
 from collections import Counter, defaultdict
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse
+from docx import Document
+from fastapi import Body, FastAPI, File, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from starlette.requests import Request
-
-from pypdf import PdfReader
-from openpyxl import load_workbook
-from docx import Document
 from openai import OpenAI
+from openpyxl import load_workbook
+from pypdf import PdfReader
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer
+from starlette.requests import Request
 
 
 app = FastAPI(title="Tender Pack Summary")
@@ -32,39 +38,13 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
+PDF_MAX_PAGES = 14
+DOCX_MAX_PARAS = 280
+DOCX_MAX_TABLES = 30
+DOCX_MAX_TABLE_ROWS = 140
+MAX_FILES_TO_PROCESS = 2500
+MAX_FILE_BYTES = 300 * 1024 * 1024
 
-# ---------------- ZIP safety ----------------
-def safe_extract_zip(zip_path: Path, extract_to: Path, max_files: int = 5000) -> list[Path]:
-    extracted: list[Path] = []
-    base = extract_to.resolve()
-
-    with zipfile.ZipFile(zip_path, "r") as z:
-        members = z.infolist()
-        if len(members) > max_files:
-            raise ValueError(f"Too many files in ZIP ({len(members)}). Limit is {max_files}.")
-
-        for m in members:
-            if m.is_dir():
-                continue
-
-            zname = (m.filename or "").replace("\\", "/").lstrip("/")
-            parts = [p for p in zname.split("/") if p not in ("", ".", "..")]
-            safe_name = "/".join(parts) if parts else Path(m.filename).name
-
-            out_path = (extract_to / safe_name).resolve()
-            if not str(out_path).startswith(str(base)):
-                raise ValueError("Unsafe ZIP: path traversal detected.")
-
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            with z.open(m, "r") as src, open(out_path, "wb") as dst:
-                shutil.copyfileobj(src, dst)
-
-            extracted.append(out_path)
-
-    return extracted
-
-
-# ---------------- classification ----------------
 KEYWORDS = {
     "boq": ["boq", "bill", "bq", "quantities", "pricing schedule", "schedule of rates", "sor", "price", "pricing"],
     "register": ["register", "drawing register", "document register", "issue register", "transmittal"],
@@ -73,77 +53,10 @@ KEYWORDS = {
     "specs": ["spec", "specification", "employer", "requirements", "works information", "er", "scope"],
     "forms": ["form", "tender form", "declaration", "questionnaire", "pqq", "sq", "itt", "appendix", "submission"],
     "programme": ["programme", "program", "schedule", "gantt"],
-    "h&s": ["rams", "h&s", "health and safety", "cdm", "cpp", "construction phase plan"],
 }
 
-DRAWING_HINTS = ["drg", "dwg", "drawing", "ga", "plan", "elev", "section", "demo", "demolition", "sketch", "sk"]
+DRAWING_HINTS = ["drg", "dwg", "drawing", "ga", "plan", "elev", "section", "sketch", "sk"]
 
-
-def _has_any(haystack: str, words: list[str]) -> bool:
-    h = (haystack or "").lower()
-    return any(w in h for w in words)
-
-
-def classify_file(p: Path, display: str | None = None) -> str:
-    ext = p.suffix.lower()
-    name = p.name.lower()
-    full = (display or p.as_posix()).lower()
-
-    if ext in [".dwg", ".dxf"]:
-        return "drawings"
-
-    if ext in [".jpg", ".jpeg", ".png", ".webp"]:
-        return "photos"
-
-    if ext in [".xlsx", ".xls", ".csv"]:
-        if _has_any(full, KEYWORDS["register"]) or _has_any(name, KEYWORDS["register"]):
-            return "registers"
-        if _has_any(full, KEYWORDS["boq"]) or _has_any(name, KEYWORDS["boq"]):
-            return "boq"
-        return "spreadsheets"
-
-    if ext in [".docx", ".doc"]:
-        if _has_any(full, KEYWORDS["forms"]) or _has_any(name, KEYWORDS["forms"]):
-            return "forms"
-        if _has_any(full, KEYWORDS["prelims"]) or _has_any(name, KEYWORDS["prelims"]):
-            return "prelims"
-        if _has_any(full, KEYWORDS["specs"]) or _has_any(name, KEYWORDS["specs"]):
-            return "specs"
-        return "documents"
-
-    if ext == ".pdf":
-        if _has_any(full, KEYWORDS["addenda"]) or _has_any(name, KEYWORDS["addenda"]):
-            return "addenda"
-        if _has_any(full, KEYWORDS["boq"]) or _has_any(name, KEYWORDS["boq"]):
-            return "boq"
-        if _has_any(full, KEYWORDS["register"]) or _has_any(name, KEYWORDS["register"]):
-            return "registers"
-        if _has_any(full, KEYWORDS["prelims"]) or _has_any(name, KEYWORDS["prelims"]):
-            return "prelims"
-        if _has_any(full, KEYWORDS["specs"]) or _has_any(name, KEYWORDS["specs"]):
-            return "specs"
-        if any(h in full for h in DRAWING_HINTS) or any(h in name for h in DRAWING_HINTS):
-            return "drawings"
-        return "pdfs"
-
-    return "other"
-
-
-def guess_revision(filename: str) -> str | None:
-    s = (filename or "").upper()
-    m = re.search(r"(?:REV[\s_\-]*)?([PC]\d{2,3})\b", s)
-    return m.group(1) if m else None
-
-
-def guess_drawing_number(filename: str) -> str | None:
-    s = Path(filename).stem.upper()
-    m = re.search(r"\b([A-Z]{1,4}[-_ ]?\d{2,6})\b", s)
-    if m:
-        return m.group(1).replace(" ", "-").replace("_", "-")
-    return None
-
-
-# ---------------- extraction helpers ----------------
 ESTIMATOR_KEYWORDS = [
     "asbestos", "acm", "soft strip", "strip out", "demolition", "temporary works", "propping",
     "party wall", "working hours", "out of hours", "noise", "dust", "vibration",
@@ -151,9 +64,8 @@ ESTIMATOR_KEYWORDS = [
     "waste", "recycling", "segregation", "muck away", "skip", "haulage", "crushing", "arisings",
     "water", "electric", "gas", "services", "live", "isolation", "disconnect", "diversion",
     "section 61", "access", "logistics", "hoarding", "scaffold", "crane", "lift",
-    "phasing", "sequence", "sequencing",
+    "phasing", "sequence", "sequencing", "retention", "bond", "warranty", "insurance",
     "liquidated damages", "ld", "lad", "penalty",
-    "retention", "bond", "warranty", "insurance",
 ]
 
 RISK_BUCKETS: dict[str, list[str]] = {
@@ -195,12 +107,12 @@ PROGRAMME_PATTERNS = [
     r"(\d{1,3})\s*(weeks?|months?)\s*(programme|duration|contract period)",
 ]
 WORKING_HOURS_PATTERNS = [
-    r"(working hours|site hours|hours of work)\s*[:\-]?\s*([^\n]{0,200})",
-    r"(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?).{0,60}(\d{1,2}[:.]\d{2}).{0,30}(\d{1,2}[:.]\d{2})",
+    r"(working hours|site hours|hours of work)\s*[:\-]?\s*([^\n]{0,220})",
+    r"(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?).{0,80}(\d{1,2}[:.]\d{2}).{0,40}(\d{1,2}[:.]\d{2})",
 ]
 INSURANCE_PATTERNS = [
-    r"\b(public liability|employers liability|EL|PL)\b.{0,120}(£\s?\d[\d,]*\.?\d*)",
-    r"\b(insurance)\b.{0,160}(£\s?\d[\d,]*\.?\d*)",
+    r"\b(public liability|employers liability|EL|PL)\b.{0,140}(£\s?\d[\d,]*\.?\d*)",
+    r"\b(insurance)\b.{0,180}(£\s?\d[\d,]*\.?\d*)",
 ]
 ACCREDITATION_PATTERNS = [
     r"\b(CHAS|SMAS|SafeContractor|Constructionline|ISO\s?9001|ISO\s?14001|ISO\s?45001)\b.{0,180}",
@@ -208,19 +120,57 @@ ACCREDITATION_PATTERNS = [
 
 REQ_STRICT_RE = re.compile(r"\b(must|shall|required|mandatory|as a minimum|minimum of|no later than)\b", re.I)
 REQ_LOOSE_RE = re.compile(r"\b(should|please|requested|provide|submit|include|confirm)\b", re.I)
-
-SENT_SPLIT_RE = re.compile(r"(?<=[\.\!\?])\s+|\n+")
-
 COMMERCIAL_SIGNAL_RE = re.compile(r"(£\s?\d|%\b|\bweeks?\b|\bmonths?\b|\b\d{1,2}[:.]\d{2}\b)", re.I)
+SENT_SPLIT_RE = re.compile(r"(?<=[\.\!\?])\s+|\n+")
 IRRELEVANT_DOC_HINTS = [
     "breeam", "credit", "wat 01", "assessor", "calculator", "guidance",
     "performance levels", "this document represents guidance",
 ]
-_REQUIREMENT_FLOOD_HINTS = [
+REQUIREMENT_FLOOD_HINTS = [
     "designer", "architect", "design intent", "building regulations",
     "confidential", "not be disclosed", "treated as confidential",
     "acceptance shall not", "cdp", "supplementary drawings",
 ]
+IGNORED_FILENAMES = {
+    ".ds_store", "thumbs.db", "desktop.ini"
+}
+IGNORED_SUFFIXES = {
+    ".tmp", ".bak", ".lock"
+}
+
+
+def _has_any(haystack: str, words: list[str]) -> bool:
+    h = (haystack or "").lower()
+    return any(w in h for w in words)
+
+
+def _safe_json_loads(s: str) -> dict[str, Any] | None:
+    try:
+        data = json.loads(s)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _trim_list(items: Any, limit: int = 10, width: int = 320) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for x in items:
+        if not isinstance(x, str):
+            continue
+        x2 = _normalize_line(x)[:width]
+        if not x2:
+            continue
+        k = x2.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(x2)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _clean_text(s: str) -> str:
@@ -306,7 +256,7 @@ def _sentences_around(text: str, idx: int, max_sentences: int = 2) -> str:
     for j in range(max(0, s_i), min(len(offsets), s_i + max_sentences)):
         sent = offsets[j][2]
         if sent and not _is_gibberish_line(sent) and not _looks_like_schedule_row(sent):
-            chosen.append(sent[:340])
+            chosen.append(sent[:360])
 
     return " ".join(chosen).strip()
 
@@ -327,7 +277,7 @@ def _sentence_score(s: str) -> int:
     if REQ_LOOSE_RE.search(s):
         score += 1
 
-    if any(h in s_l for h in _REQUIREMENT_FLOOD_HINTS):
+    if any(h in s_l for h in REQUIREMENT_FLOOD_HINTS):
         score -= 5
 
     if len(s) < 90:
@@ -336,6 +286,108 @@ def _sentence_score(s: str) -> int:
         score -= 3
 
     return score
+
+
+def _is_supported_upload(filename: str) -> bool:
+    base = Path(filename).name.lower()
+    if base in IGNORED_FILENAMES:
+        return False
+    if base.startswith("~$"):
+        return False
+    if Path(filename).suffix.lower() in IGNORED_SUFFIXES:
+        return False
+    return True
+
+
+def safe_extract_zip(zip_path: Path, extract_to: Path, max_files: int = 5000) -> list[Path]:
+    extracted: list[Path] = []
+    base = extract_to.resolve()
+
+    with zipfile.ZipFile(zip_path, "r") as z:
+        members = z.infolist()
+        if len(members) > max_files:
+            raise ValueError(f"Too many files in ZIP ({len(members)}). Limit is {max_files}.")
+
+        for m in members:
+            if m.is_dir():
+                continue
+
+            zname = (m.filename or "").replace("\\", "/").lstrip("/")
+            parts = [p for p in zname.split("/") if p not in ("", ".", "..")]
+            safe_name = "/".join(parts) if parts else Path(m.filename).name
+            if not _is_supported_upload(safe_name):
+                continue
+
+            out_path = (extract_to / safe_name).resolve()
+            if not str(out_path).startswith(str(base)):
+                raise ValueError("Unsafe ZIP: path traversal detected.")
+
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with z.open(m, "r") as src, open(out_path, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+            extracted.append(out_path)
+
+    return extracted
+
+
+def classify_file(p: Path, display: str | None = None) -> str:
+    ext = p.suffix.lower()
+    name = p.name.lower()
+    full = (display or p.as_posix()).lower()
+
+    if ext in [".dwg", ".dxf"]:
+        return "drawings"
+
+    if ext in [".jpg", ".jpeg", ".png", ".webp"]:
+        return "photos"
+
+    if ext in [".xlsx", ".xls", ".csv"]:
+        if _has_any(full, KEYWORDS["register"]) or _has_any(name, KEYWORDS["register"]):
+            return "registers"
+        if _has_any(full, KEYWORDS["boq"]) or _has_any(name, KEYWORDS["boq"]):
+            return "boq"
+        return "spreadsheets"
+
+    if ext in [".docx", ".doc"]:
+        if _has_any(full, KEYWORDS["forms"]) or _has_any(name, KEYWORDS["forms"]):
+            return "forms"
+        if _has_any(full, KEYWORDS["prelims"]) or _has_any(name, KEYWORDS["prelims"]):
+            return "prelims"
+        if _has_any(full, KEYWORDS["specs"]) or _has_any(name, KEYWORDS["specs"]):
+            return "specs"
+        return "documents"
+
+    if ext == ".pdf":
+        if _has_any(full, KEYWORDS["addenda"]) or _has_any(name, KEYWORDS["addenda"]):
+            return "addenda"
+        if _has_any(full, KEYWORDS["boq"]) or _has_any(name, KEYWORDS["boq"]):
+            return "boq"
+        if _has_any(full, KEYWORDS["register"]) or _has_any(name, KEYWORDS["register"]):
+            return "registers"
+        if _has_any(full, KEYWORDS["prelims"]) or _has_any(name, KEYWORDS["prelims"]):
+            return "prelims"
+        if _has_any(full, KEYWORDS["specs"]) or _has_any(name, KEYWORDS["specs"]):
+            return "specs"
+        if any(h in full for h in DRAWING_HINTS) or any(h in name for h in DRAWING_HINTS):
+            return "drawings"
+        return "pdfs"
+
+    return "other"
+
+
+def guess_revision(filename: str) -> str | None:
+    s = (filename or "").upper()
+    m = re.search(r"(?:REV[\s_\-]*)?([PC]\d{2,3})\b", s)
+    return m.group(1) if m else None
+
+
+def guess_drawing_number(filename: str) -> str | None:
+    s = Path(filename).stem.upper()
+    m = re.search(r"\b([A-Z]{1,4}[-_ ]?\d{2,6})\b", s)
+    if m:
+        return m.group(1).replace(" ", "-").replace("_", "-")
+    return None
 
 
 def _extract_requirements(text: str, max_lines: int = 20) -> dict[str, list[str]]:
@@ -355,7 +407,7 @@ def _extract_requirements(text: str, max_lines: int = 20) -> dict[str, list[str]
             return None
         if s2[:1].islower() and not re.match(r"^(i|we)\b", s2.lower()):
             return None
-        s2 = s2[:360]
+        s2 = s2[:380]
         if _sentence_score(s2) <= 0:
             return None
         return s2
@@ -405,7 +457,7 @@ def _find_evidence(text: str, patterns: list[str], max_items: int = 6) -> list[d
     for pat in patterns:
         for m in re.finditer(pat, text, flags=re.IGNORECASE):
             ctx = _sentences_around(text, m.start(), max_sentences=2)
-            ctx = _normalize_line(ctx)[:420]
+            ctx = _normalize_line(ctx)[:440]
             if not ctx or _looks_irrelevant(ctx) or _looks_like_schedule_row(ctx) or _is_gibberish_line(ctx):
                 continue
             found.append({"match": ctx})
@@ -438,7 +490,7 @@ def _find_bucket_evidence(merged: str, needle: str, bucket: str, max_items: int 
         if idx == -1:
             break
         s = _sentences_around(merged, idx, max_sentences=2)
-        s = _normalize_line(s)[:420]
+        s = _normalize_line(s)[:440]
         if s and not _looks_irrelevant(s) and not _looks_like_schedule_row(s) and not _is_gibberish_line(s):
             sl = s.lower()
             if bucket == "Services / isolations":
@@ -449,44 +501,6 @@ def _find_bucket_evidence(merged: str, needle: str, bucket: str, max_items: int 
                 out.append(s)
         start = idx + len(needle)
     return out
-
-
-def _safe_json_loads(s: str) -> dict[str, Any] | None:
-    try:
-        data = json.loads(s)
-        if isinstance(data, dict):
-            return data
-    except Exception:
-        pass
-    return None
-
-
-def _trim_list(items: Any, limit: int = 10, width: int = 320) -> list[str]:
-    if not isinstance(items, list):
-        return []
-    out: list[str] = []
-    seen: set[str] = set()
-    for x in items:
-        if not isinstance(x, str):
-            continue
-        x2 = _normalize_line(x)[:width]
-        if not x2:
-            continue
-        k = x2.lower()
-        if k in seen:
-            continue
-        seen.add(k)
-        out.append(x2)
-        if len(out) >= limit:
-            break
-    return out
-
-
-# HARD caps to prevent Render/timeouts
-PDF_MAX_PAGES = 14
-DOCX_MAX_PARAS = 280
-DOCX_MAX_TABLES = 30
-DOCX_MAX_TABLE_ROWS = 140
 
 
 def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, Any]:
@@ -526,7 +540,7 @@ def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, An
         info["date_candidates"] = sorted(dates)[:30]
 
         info["snippet"] = text[:1200]
-        info["text"] = text[:22000]
+        info["text"] = text[:24000]
         info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
@@ -570,7 +584,7 @@ def extract_docx_info(path: Path, max_paras: int = DOCX_MAX_PARAS) -> dict[str, 
         info["keyword_hits"] = dict(sorted(hits.items(), key=lambda x: x[1], reverse=True)[:25])
 
         info["snippet"] = text[:1200]
-        info["text"] = text[:22000]
+        info["text"] = text[:24000]
         info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
@@ -719,7 +733,7 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
             if k in seen:
                 continue
             seen.add(k)
-            out.append(x2[:320])
+            out.append(x2[:340])
             if len(out) >= limit:
                 break
         return out
@@ -791,6 +805,39 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
     if not executive_lines:
         executive_lines.append("No clear commercial headline terms detected from the first-pass scan.")
 
+    overview_parts: list[str] = []
+    if headline_deadline:
+        overview_parts.append(f"The tender appears to close on {headline_deadline}.")
+    if headline_submission:
+        overview_parts.append(f"Submission instructions indicate {headline_submission.lower()}.")
+    if headline_prog:
+        overview_parts.append(f"The programme information suggests {headline_prog.lower()}.")
+    if headline_hours:
+        overview_parts.append(f"Access or working hour constraints indicate {headline_hours.lower()}.")
+    if not overview_parts:
+        overview_parts.append("The pack has been scanned and the strongest commercial and logistical indicators are summarised below.")
+
+    commercial_summary_parts: list[str] = []
+    if headline_ld:
+        commercial_summary_parts.append(f"Liquidated damages appear to be referenced: {headline_ld}.")
+    if headline_ret:
+        commercial_summary_parts.append(f"Retention provisions appear to be referenced: {headline_ret}.")
+    if headline_ins:
+        commercial_summary_parts.append(f"Insurance requirements appear to be referenced: {headline_ins}.")
+    if not commercial_summary_parts:
+        commercial_summary_parts.append("No strong commercial headline terms were confidently extracted beyond the core tender instructions.")
+
+    if strict_clean:
+        pricing_watchouts = strict_clean[:8]
+    else:
+        pricing_watchouts = constraints[:8]
+
+    clarifications = missing[:]
+    if not clarifications and not submission:
+        clarifications.append("Confirm tender submission route and any file size or naming constraints.")
+    if not clarifications and not headline_prog:
+        clarifications.append("Confirm programme duration, milestones, and any phased handover requirements.")
+
     acc_short: list[str] = []
     for x in (accreditations or [])[:12]:
         m = _normalize_line(x.get("match") or "")
@@ -804,7 +851,15 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
             break
 
     return {
+        "title": "Tender Pack Summary",
         "executive_summary": "EXECUTIVE SUMMARY\n" + "\n".join([f"• {x}" for x in executive_lines]),
+        "overview": " ".join(overview_parts),
+        "commercial_summary": " ".join(commercial_summary_parts),
+        "programme_access_summary": " ".join(constraints[:4]) if constraints else "No strong programme or access constraints were confidently extracted.",
+        "risk_summary": " ".join(constraints[:5]) if constraints else "No major delivery risks were confidently extracted from the scanned text.",
+        "submission_summary": headline_submission or "Submission method was not confidently extracted.",
+        "pricing_watchouts": pricing_watchouts,
+        "clarifications": clarifications[:10],
         "key_facts": {
             "deadline_or_key_date": headline_deadline,
             "submission_route": headline_submission,
@@ -835,20 +890,22 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
 
 
 def ai_enhance_briefing(briefing: dict[str, Any]) -> dict[str, Any]:
-    """
-    Optional OpenAI step.
-    Keeps your existing extraction, then asks the model to turn it into a cleaner estimator briefing.
-    If API key/model fails, it quietly falls back to the raw briefing.
-    """
     if not openai_client:
         return briefing
 
     payload = {
+        "overview": briefing.get("overview", ""),
+        "commercial_summary": briefing.get("commercial_summary", ""),
+        "programme_access_summary": briefing.get("programme_access_summary", ""),
+        "risk_summary": briefing.get("risk_summary", ""),
+        "submission_summary": briefing.get("submission_summary", ""),
         "key_facts": briefing.get("key_facts", {}),
         "dates_found": briefing.get("dates_found", [])[:12],
         "constraints": briefing.get("constraints", [])[:10],
         "requirements_strict": briefing.get("requirements_strict", [])[:12],
         "requirements_loose": briefing.get("requirements_loose", [])[:10],
+        "pricing_watchouts": briefing.get("pricing_watchouts", [])[:10],
+        "clarifications": briefing.get("clarifications", [])[:10],
         "missing": briefing.get("missing", [])[:10],
         "evidence": briefing.get("evidence", {}),
     }
@@ -857,20 +914,28 @@ def ai_enhance_briefing(briefing: dict[str, Any]) -> dict[str, Any]:
 You are a senior UK construction estimator reviewing a tender pack.
 
 You will receive extracted evidence from tender documents.
-Your task is to turn that evidence into a clean, practical briefing for estimators.
+Turn it into a clean, practical tender summary page that reads like a report, not like notes.
 
 Rules:
 - Use ONLY the provided evidence.
-- Ignore broken fragments, partial sentences, or anything that does not clearly make sense.
-- Do NOT mention file names, source references, or "the evidence says".
+- Ignore broken fragments or anything unclear.
+- Do NOT mention file names, sources, or "the evidence says".
 - Write clearly and commercially.
-- Prioritise: deadline, submission route, programme, working hours, access/logistics, LDs, retention, insurance, permits, asbestos, isolations, waste, temporary works.
-- Keep requirements estimator-relevant. Do not include generic legal/design fluff unless it clearly affects cost, risk, logistics, programme, or compliance.
-- If a field is unclear, leave it null or omit it from lists.
-- Return STRICT JSON only with this exact structure:
+- Expand each section into useful plain English, but stay concise.
+- Prioritise deadline, submission route, programme, access, working hours, LDs, retention, insurance, permits, asbestos, isolations, waste, temporary works.
+- Only keep requirements that matter to pricing, delivery, risk, logistics, compliance, or tender submission.
 
+Return STRICT JSON with this exact structure:
 {
+  "title": "string",
   "executive_summary": "string",
+  "overview": "string",
+  "commercial_summary": "string",
+  "programme_access_summary": "string",
+  "risk_summary": "string",
+  "submission_summary": "string",
+  "pricing_watchouts": ["..."],
+  "clarifications": ["..."],
   "key_facts": {
     "deadline_or_key_date": "string or null",
     "submission_route": "string or null",
@@ -888,8 +953,6 @@ Rules:
 }
 """
 
-    user_prompt = json.dumps(payload, ensure_ascii=False)
-
     try:
         resp = openai_client.chat.completions.create(
             model=OPENAI_MODEL,
@@ -897,7 +960,7 @@ Rules:
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
         )
 
@@ -907,7 +970,15 @@ Rules:
             return briefing
 
         enhanced = {
+            "title": parsed.get("title") or briefing.get("title") or "Tender Pack Summary",
             "executive_summary": parsed.get("executive_summary") or briefing.get("executive_summary"),
+            "overview": parsed.get("overview") or briefing.get("overview"),
+            "commercial_summary": parsed.get("commercial_summary") or briefing.get("commercial_summary"),
+            "programme_access_summary": parsed.get("programme_access_summary") or briefing.get("programme_access_summary"),
+            "risk_summary": parsed.get("risk_summary") or briefing.get("risk_summary"),
+            "submission_summary": parsed.get("submission_summary") or briefing.get("submission_summary"),
+            "pricing_watchouts": _trim_list(parsed.get("pricing_watchouts"), 10, 340) or briefing.get("pricing_watchouts", []),
+            "clarifications": _trim_list(parsed.get("clarifications"), 10, 340) or briefing.get("clarifications", []),
             "key_facts": {
                 "deadline_or_key_date": (parsed.get("key_facts") or {}).get("deadline_or_key_date") or (briefing.get("key_facts") or {}).get("deadline_or_key_date"),
                 "submission_route": (parsed.get("key_facts") or {}).get("submission_route") or (briefing.get("key_facts") or {}).get("submission_route"),
@@ -919,19 +990,125 @@ Rules:
                 "accreditations": _trim_list((parsed.get("key_facts") or {}).get("accreditations"), 6, 220) or (briefing.get("key_facts") or {}).get("accreditations", []),
             },
             "dates_found": briefing.get("dates_found", []),
-            "constraints": _trim_list(parsed.get("constraints"), 10, 320) or briefing.get("constraints", []),
-            "requirements_strict": _trim_list(parsed.get("requirements_strict"), 14, 320) or briefing.get("requirements_strict", []),
-            "requirements_loose": _trim_list(parsed.get("requirements_loose"), 12, 320) or briefing.get("requirements_loose", []),
+            "constraints": _trim_list(parsed.get("constraints"), 10, 340) or briefing.get("constraints", []),
+            "requirements_strict": _trim_list(parsed.get("requirements_strict"), 14, 340) or briefing.get("requirements_strict", []),
+            "requirements_loose": _trim_list(parsed.get("requirements_loose"), 12, 340) or briefing.get("requirements_loose", []),
             "missing": _trim_list(parsed.get("missing"), 10, 220) or briefing.get("missing", []),
             "sources_scanned": briefing.get("sources_scanned", 0),
             "evidence": briefing.get("evidence", {}),
             "ai_used": True,
         }
-
         return enhanced
 
     except Exception:
         return briefing
+
+
+def build_pdf_report(report: dict[str, Any]) -> bytes:
+    briefing = report.get("briefing") or {}
+    summary = report.get("summary") or {}
+    key_facts = briefing.get("key_facts") or {}
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        rightMargin=16 * mm,
+        leftMargin=16 * mm,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+        title=(briefing.get("title") or "Tender Pack Summary"),
+    )
+
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="TitleSmall", parent=styles["Title"], fontSize=20, leading=24, textColor=colors.HexColor("#111827")))
+    styles.add(ParagraphStyle(name="SectionHead", parent=styles["Heading2"], fontSize=12, leading=15, textColor=colors.HexColor("#374151"), spaceAfter=6))
+    styles.add(ParagraphStyle(name="BodySmall", parent=styles["BodyText"], fontSize=9.5, leading=13, textColor=colors.HexColor("#111827")))
+    styles.add(ParagraphStyle(name="Meta", parent=styles["BodyText"], fontSize=8.5, leading=11, textColor=colors.HexColor("#6B7280")))
+
+    story: list[Any] = []
+
+    def esc(s: Any) -> str:
+        return (str(s or "")
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;"))
+
+    def add_paragraph(text: str, style: str = "BodySmall") -> None:
+        if text:
+            story.append(Paragraph(esc(text), styles[style]))
+            story.append(Spacer(1, 3 * mm))
+
+    def add_bullets(items: list[str]) -> None:
+        cleaned = [i for i in items if isinstance(i, str) and i.strip()]
+        if not cleaned:
+            return
+        flow = ListFlowable(
+            [ListItem(Paragraph(esc(i), styles["BodySmall"])) for i in cleaned],
+            bulletType="bullet",
+            leftPadding=14,
+        )
+        story.append(flow)
+        story.append(Spacer(1, 3 * mm))
+
+    title = briefing.get("title") or "Tender Pack Summary"
+    story.append(Paragraph(esc(title), styles["TitleSmall"]))
+    story.append(Paragraph(
+        esc(f"Generated {datetime.utcnow().strftime('%d %b %Y %H:%M UTC')} • Files scanned: {summary.get('total_files_scanned', 0)}"),
+        styles["Meta"],
+    ))
+    story.append(Spacer(1, 4 * mm))
+
+    story.append(Paragraph("Executive Summary", styles["SectionHead"]))
+    add_paragraph(briefing.get("overview") or briefing.get("executive_summary") or "")
+
+    story.append(Paragraph("Commercial Summary", styles["SectionHead"]))
+    add_paragraph(briefing.get("commercial_summary") or "")
+
+    story.append(Paragraph("Programme and Access", styles["SectionHead"]))
+    add_paragraph(briefing.get("programme_access_summary") or "")
+
+    story.append(Paragraph("Risk Summary", styles["SectionHead"]))
+    add_paragraph(briefing.get("risk_summary") or "")
+
+    story.append(Paragraph("Submission Summary", styles["SectionHead"]))
+    add_paragraph(briefing.get("submission_summary") or "")
+
+    story.append(Paragraph("Key Facts", styles["SectionHead"]))
+    facts: list[str] = []
+    fact_map = [
+        ("Deadline / key date", key_facts.get("deadline_or_key_date")),
+        ("Submission route", key_facts.get("submission_route")),
+        ("Programme / duration", key_facts.get("programme_duration")),
+        ("Working hours", key_facts.get("working_hours")),
+        ("Retention", key_facts.get("retention")),
+        ("LD / LADs", key_facts.get("liquidated_damages")),
+        ("Insurance", key_facts.get("insurance_levels")),
+    ]
+    for label, value in fact_map:
+        if value:
+            facts.append(f"{label}: {value}")
+    if key_facts.get("accreditations"):
+        facts.append("Accreditations: " + ", ".join(key_facts["accreditations"][:6]))
+    add_bullets(facts or ["No key facts were confidently extracted."])
+
+    story.append(Paragraph("Pricing Watchouts", styles["SectionHead"]))
+    add_bullets(briefing.get("pricing_watchouts") or ["No pricing watchouts were confidently extracted."])
+
+    story.append(Paragraph("Key Constraints", styles["SectionHead"]))
+    add_bullets(briefing.get("constraints") or ["No strong constraints were confidently extracted."])
+
+    story.append(Paragraph("Mandatory Requirements", styles["SectionHead"]))
+    add_bullets((briefing.get("requirements_strict") or [])[:12] or ["No strong mandatory requirements were confidently extracted."])
+
+    story.append(Paragraph("Other Submission Requests", styles["SectionHead"]))
+    add_bullets((briefing.get("requirements_loose") or [])[:10] or ["No other clear submission requests were confidently extracted."])
+
+    story.append(Paragraph("Clarifications / Queries to Raise", styles["SectionHead"]))
+    add_bullets(briefing.get("clarifications") or briefing.get("missing") or ["No additional clarifications suggested."])
+
+    doc.build(story)
+    return buf.getvalue()
 
 
 def _strip_internal_fields(sections: dict[str, list[dict[str, Any]]]) -> None:
@@ -946,7 +1123,6 @@ def _strip_internal_fields(sections: dict[str, list[dict[str, Any]]]) -> None:
                             sh.pop("preview_rows", None)
 
 
-# ---------------- routes ----------------
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
@@ -967,6 +1143,17 @@ async def _save_upload_to_path(uf: UploadFile, dest: Path, max_bytes: int) -> in
     return size
 
 
+@app.post("/api/report/pdf")
+async def report_pdf(payload: dict[str, Any] = Body(...)):
+    pdf_bytes = build_pdf_report(payload)
+    filename = "tender-summary.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.post("/api/analyse")
 async def analyse(
     zip_file: Optional[list[UploadFile]] = File(None),
@@ -985,8 +1172,6 @@ async def analyse(
         if not uploads:
             return JSONResponse({"error": "No files uploaded."}, status_code=400)
 
-        max_bytes = 300 * 1024 * 1024
-
         sections: dict[str, list[dict[str, Any]]] = defaultdict(list)
         ext_counter: Counter[str] = Counter()
 
@@ -999,7 +1184,7 @@ async def analyse(
             scanned_paths: list[tuple[Path, str]] = []
 
             for uf in uploads:
-                if not uf.filename:
+                if not uf.filename or not _is_supported_upload(uf.filename):
                     continue
 
                 uploaded_names.append(uf.filename)
@@ -1007,12 +1192,12 @@ async def analyse(
                 if uf.filename.lower().endswith(".zip"):
                     zp = tmp_path / f"upload_{len(uploaded_names)}.zip"
                     try:
-                        await _save_upload_to_path(uf, zp, max_bytes=max_bytes)
+                        await _save_upload_to_path(uf, zp, max_bytes=MAX_FILE_BYTES)
                     except ValueError:
                         return JSONResponse({"error": f"File too large (limit 300MB): {uf.filename}"}, status_code=400)
 
                     try:
-                        extracted = safe_extract_zip(zp, extract_dir, max_files=5000)
+                        extracted = safe_extract_zip(zp, extract_dir, max_files=9000)
                     except Exception as e:
                         return JSONResponse({"error": f"Could not extract ZIP {uf.filename}: {e}"}, status_code=400)
 
@@ -1025,9 +1210,12 @@ async def analyse(
                     if str(safe_rel) in ("", "."):
                         safe_rel = Path(Path(uf.filename).name)
 
+                    if not _is_supported_upload(str(safe_rel)):
+                        continue
+
                     op = tmp_path / safe_rel
                     try:
-                        await _save_upload_to_path(uf, op, max_bytes=max_bytes)
+                        await _save_upload_to_path(uf, op, max_bytes=MAX_FILE_BYTES)
                     except ValueError:
                         return JSONResponse({"error": f"File too large (limit 300MB): {uf.filename}"}, status_code=400)
 
@@ -1036,7 +1224,6 @@ async def analyse(
             total_files = 0
             by_category_count: dict[str, int] = defaultdict(int)
 
-            MAX_FILES_TO_PROCESS = 1200
             for p, display in scanned_paths[:MAX_FILES_TO_PROCESS]:
                 total_files += 1
                 ext = p.suffix.lower() if p.suffix else "(no_ext)"
