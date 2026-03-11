@@ -37,13 +37,14 @@ templates = Jinja2Templates(directory="templates")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
-OPENAI_TIMEOUT_SEC = float(os.getenv("OPENAI_TIMEOUT_SEC", "45"))
-OPENAI_SOURCE_TEXT_MAX_CHARS = int(os.getenv("OPENAI_SOURCE_TEXT_MAX_CHARS", "120000"))
+OPENAI_TIMEOUT_SEC = float(os.getenv("OPENAI_TIMEOUT_SEC", "60"))
+OPENAI_SOURCE_TEXT_MAX_CHARS = int(os.getenv("OPENAI_SOURCE_TEXT_MAX_CHARS", "140000"))
+OPENAI_SEED_TEXT_MAX_ITEMS = int(os.getenv("OPENAI_SEED_TEXT_MAX_ITEMS", "18"))
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 PDF_MAX_PAGES = 18
-DOCX_MAX_PARAS = 320
+DOCX_MAX_PARAS = 360
 DOCX_MAX_TABLES = 40
 DOCX_MAX_TABLE_ROWS = 180
 MAX_FILES_TO_PROCESS = 2500
@@ -69,7 +70,10 @@ ESTIMATOR_KEYWORDS = [
     "water", "electric", "gas", "services", "live", "isolation", "disconnect", "diversion",
     "section 61", "access", "logistics", "hoarding", "scaffold", "crane", "lift",
     "phasing", "sequence", "sequencing", "retention", "bond", "warranty", "insurance",
-    "liquidated damages", "ld", "lad", "penalty",
+    "liquidated damages", "ld", "lad", "penalty", "design responsibility", "contractor design",
+    "working area", "occupation", "occupied", "protection", "making good", "testing",
+    "commissioning", "warranty", "guarantee", "survey", "existing conditions", "allowance",
+    "exclusion", "assumption", "stakeholder", "neighbour", "planning", "conservation",
 ]
 
 RISK_BUCKETS: dict[str, list[str]] = {
@@ -83,6 +87,8 @@ RISK_BUCKETS: dict[str, list[str]] = {
     "Permits / licences": ["permit", "licence", "license", "consent", "section 61"],
     "Working hours / constraints": ["working hours", "site hours", "out of hours", "weekend", "night works"],
     "Liquidated damages / penalties": ["liquidated damages", "lds", "lads", "lad", "penalty"],
+    "Design responsibility / coordination": ["design responsibility", "contractor design", "coordination", "coordination responsibility", "temporary design"],
+    "Existing building / survey reliance": ["existing conditions", "survey", "site survey", "record drawing", "existing building", "existing structure"],
 }
 
 DATE_PATTERNS = [
@@ -100,7 +106,7 @@ SUBMISSION_PATTERNS = [
 ]
 LD_PATTERNS = [
     r"(liquidated damages|LDs?|LADs?)\s*[:\-]?\s*(£\s?\d[\d,]*\.?\d*)",
-    r"(liquidated damages|LDs?|LADs?).{0,120}(£\s?\d[\d,]*\.?\d*)",
+    r"(liquidated damages|LDs?|LADs?).{0,140}(£\s?\d[\d,]*\.?\d*)",
 ]
 RETENTION_PATTERNS = [
     r"(retention)\s*[:\-]?\s*(\d{1,2}(\.\d+)?\s*%)",
@@ -115,7 +121,7 @@ WORKING_HOURS_PATTERNS = [
     r"(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?).{0,100}(\d{1,2}[:.]\d{2}).{0,50}(\d{1,2}[:.]\d{2})",
 ]
 INSURANCE_PATTERNS = [
-    r"\b(public liability|employers liability|EL|PL)\b.{0,180}(£\s?\d[\d,]*\.?\d*)",
+    r"\b(public liability|employers liability|EL|PL)\b.{0,200}(£\s?\d[\d,]*\.?\d*)",
     r"\b(insurance)\b.{0,220}(£\s?\d[\d,]*\.?\d*)",
 ]
 ACCREDITATION_PATTERNS = [
@@ -129,11 +135,6 @@ SENT_SPLIT_RE = re.compile(r"(?<=[\.\!\?])\s+|\n+")
 IRRELEVANT_DOC_HINTS = [
     "breeam", "credit", "wat 01", "assessor", "calculator", "guidance",
     "performance levels", "this document represents guidance",
-]
-REQUIREMENT_FLOOD_HINTS = [
-    "designer", "architect", "design intent", "building regulations",
-    "confidential", "not be disclosed", "treated as confidential",
-    "acceptance shall not", "cdp", "supplementary drawings",
 ]
 IGNORED_FILENAMES = {
     ".ds_store", "thumbs.db", "desktop.ini"
@@ -181,6 +182,13 @@ def _trim_list(items: Any, limit: int = 10, width: int = 320) -> list[str]:
     return out
 
 
+def _trim_string(value: Any, width: int = 700) -> str | None:
+    if not isinstance(value, str):
+        return None
+    v = _normalize_line(value)
+    return v[:width] if v else None
+
+
 def _clean_text(s: str) -> str:
     s = (s or "").replace("\x00", "")
     s = re.sub(r"(\w)-\n(\w)", r"\1\2", s)
@@ -201,28 +209,30 @@ def _looks_like_schedule_row(s: str) -> bool:
     s2 = _normalize_line(s)
     if not s2:
         return True
-    if s2.count("|") >= 2:
+    if s2.count("|") >= 3:
         return True
     tokens = re.findall(r"\b[A-Z]{1,4}[-_ ]?\d{1,6}[A-Z]?\b", s2)
-    if len(tokens) >= 5:
+    if len(tokens) >= 6:
         return True
     digits = sum(1 for c in s2 if c.isdigit())
-    if digits >= 18 and len(s2) < 160:
+    if digits >= 24 and len(s2) < 180:
         return True
     return False
 
 
 def _is_gibberish_line(s: str) -> bool:
     s2 = _normalize_line(s)
-    if len(s2) < 12:
+    if len(s2) < 8:
         return True
     if _looks_like_schedule_row(s2):
         return True
     letters = [c for c in s2 if c.isalpha()]
     if letters:
         upper_ratio = sum(1 for c in letters if c.isupper()) / max(1, len(letters))
-        if upper_ratio > 0.78 and len(s2) > 50:
+        if upper_ratio > 0.85 and len(s2) > 60:
             return True
+    if re.fullmatch(r"[\d\W_]+", s2):
+        return True
     return False
 
 
@@ -260,7 +270,7 @@ def _sentences_around(text: str, idx: int, max_sentences: int = 2) -> str:
     for j in range(max(0, s_i), min(len(offsets), s_i + max_sentences)):
         sent = offsets[j][2]
         if sent and not _is_gibberish_line(sent) and not _looks_like_schedule_row(sent):
-            chosen.append(sent[:360])
+            chosen.append(sent[:420])
 
     return " ".join(chosen).strip()
 
@@ -270,24 +280,25 @@ def _sentence_score(s: str) -> int:
     score = 0
 
     if COMMERCIAL_SIGNAL_RE.search(s):
-        score += 6
+        score += 5
 
     for kw in ESTIMATOR_KEYWORDS:
         if kw in s_l:
-            score += 3
+            score += 2
 
     if REQ_STRICT_RE.search(s):
         score += 2
     if REQ_LOOSE_RE.search(s):
         score += 1
 
-    if any(h in s_l for h in REQUIREMENT_FLOOD_HINTS):
-        score -= 5
-
-    if len(s) < 90:
-        score -= 2
-    if s.count(" ") < 12:
-        score -= 3
+    if len(s) >= 60:
+        score += 2
+    if len(s) >= 120:
+        score += 2
+    if s.count(" ") >= 10:
+        score += 2
+    if len(re.findall(r"[A-Za-z]", s)) < 12:
+        score -= 4
 
     return score
 
@@ -398,7 +409,7 @@ def guess_drawing_number(filename: str) -> str | None:
     return None
 
 
-def _extract_requirements(text: str, max_lines: int = 20) -> dict[str, list[str]]:
+def _extract_requirements(text: str, max_lines: int = 24) -> dict[str, list[str]]:
     if not text:
         return {"strict": [], "loose": []}
 
@@ -413,9 +424,7 @@ def _extract_requirements(text: str, max_lines: int = 20) -> dict[str, list[str]
             return None
         if _looks_like_schedule_row(s2) or _is_gibberish_line(s2):
             return None
-        if s2[:1].islower() and not re.match(r"^(i|we)\b", s2.lower()):
-            return None
-        s2 = s2[:380]
+        s2 = s2[:420]
         if _sentence_score(s2) <= 0:
             return None
         return s2
@@ -429,12 +438,10 @@ def _extract_requirements(text: str, max_lines: int = 20) -> dict[str, list[str]
         elif REQ_LOOSE_RE.search(s2):
             candidates.append((_sentence_score(s2), "loose", s2))
 
-    if sum(1 for _, b, _ in candidates if b == "strict") < 6:
-        for m in REQ_STRICT_RE.finditer(text):
-            chunk = _sentences_around(text, m.start(), max_sentences=2)
-            chunk = clean(chunk)
-            if not chunk:
-                continue
+    for m in REQ_STRICT_RE.finditer(text):
+        chunk = _sentences_around(text, m.start(), max_sentences=2)
+        chunk = clean(chunk)
+        if chunk:
             candidates.append((_sentence_score(chunk), "strict", chunk))
 
     candidates.sort(key=lambda x: x[0], reverse=True)
@@ -465,7 +472,7 @@ def _find_evidence(text: str, patterns: list[str], max_items: int = 6) -> list[d
     for pat in patterns:
         for m in re.finditer(pat, text, flags=re.IGNORECASE):
             ctx = _sentences_around(text, m.start(), max_sentences=2)
-            ctx = _normalize_line(ctx)[:440]
+            ctx = _normalize_line(ctx)[:520]
             if not ctx or _looks_irrelevant(ctx) or _looks_like_schedule_row(ctx) or _is_gibberish_line(ctx):
                 continue
             found.append({"match": ctx})
@@ -486,7 +493,7 @@ def _best_line_from_evidence(items: list[dict[str, str]] | None) -> str | None:
         sc = _sentence_score(s)
         if best is None or sc > best[0]:
             best = (sc, s)
-    return best[1][:320] if best else None
+    return best[1][:360] if best else None
 
 
 def _find_bucket_evidence(merged: str, needle: str, bucket: str, max_items: int = 1) -> list[str]:
@@ -498,17 +505,38 @@ def _find_bucket_evidence(merged: str, needle: str, bucket: str, max_items: int 
         if idx == -1:
             break
         s = _sentences_around(merged, idx, max_sentences=2)
-        s = _normalize_line(s)[:440]
+        s = _normalize_line(s)[:520]
         if s and not _looks_irrelevant(s) and not _looks_like_schedule_row(s) and not _is_gibberish_line(s):
-            sl = s.lower()
-            if bucket == "Services / isolations":
-                if not any(x in sl for x in ["isolation", "isolations", "live", "disconnect", "disconnection", "divert", "diversion"]):
-                    start = idx + len(needle)
-                    continue
             if _sentence_score(s) > 0 and s not in out:
                 out.append(s)
         start = idx + len(needle)
     return out
+
+
+def _collect_notable_sentences(text: str, limit: int = 28) -> list[str]:
+    if not text:
+        return []
+
+    out: list[tuple[int, str]] = []
+    seen: set[str] = set()
+
+    for s in _split_sentences(text):
+        s2 = _normalize_line(s)[:420]
+        if not s2:
+            continue
+        if _looks_irrelevant(s2) or _looks_like_schedule_row(s2) or _is_gibberish_line(s2):
+            continue
+        score = _sentence_score(s2)
+        if score <= 1:
+            continue
+        key = s2.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((score, s2))
+
+    out.sort(key=lambda x: x[0], reverse=True)
+    return [s for _, s in out[:limit]]
 
 
 def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, Any]:
@@ -519,6 +547,7 @@ def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, An
         "snippet": "",
         "text_len": 0,
         "requirements": {"strict": [], "loose": []},
+        "notable_sentences": [],
     }
 
     try:
@@ -548,8 +577,9 @@ def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, An
         info["date_candidates"] = sorted(dates)[:30]
 
         info["snippet"] = text[:1200]
-        info["text"] = text[:28000]
+        info["text"] = text[:32000]
         info["requirements"] = _extract_requirements(text)
+        info["notable_sentences"] = _collect_notable_sentences(text, limit=18)
 
     except Exception as e:
         info["error"] = f"PDF read failed: {e}"
@@ -558,7 +588,14 @@ def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, An
 
 
 def extract_docx_info(path: Path, max_paras: int = DOCX_MAX_PARAS) -> dict[str, Any]:
-    info: dict[str, Any] = {"headings": [], "keyword_hits": {}, "snippet": "", "text_len": 0, "requirements": {"strict": [], "loose": []}}
+    info: dict[str, Any] = {
+        "headings": [],
+        "keyword_hits": {},
+        "snippet": "",
+        "text_len": 0,
+        "requirements": {"strict": [], "loose": []},
+        "notable_sentences": [],
+    }
 
     try:
         doc = Document(str(path))
@@ -571,7 +608,7 @@ def extract_docx_info(path: Path, max_paras: int = DOCX_MAX_PARAS) -> dict[str, 
             for row in table.rows[:DOCX_MAX_TABLE_ROWS]:
                 cells = [c.text.strip() for c in row.cells if c.text and c.text.strip()]
                 if cells:
-                    table_lines.append(" ".join(cells)[:420])
+                    table_lines.append(" ".join(cells)[:520])
 
         text = _clean_text("\n".join(paras + table_lines))
         info["text_len"] = len(text)
@@ -580,7 +617,7 @@ def extract_docx_info(path: Path, max_paras: int = DOCX_MAX_PARAS) -> dict[str, 
         for p in doc.paragraphs:
             if p.style and p.style.name and "Heading" in p.style.name and p.text.strip():
                 headings.append(p.text.strip())
-            if len(headings) >= 30:
+            if len(headings) >= 40:
                 break
         info["headings"] = headings
 
@@ -592,8 +629,9 @@ def extract_docx_info(path: Path, max_paras: int = DOCX_MAX_PARAS) -> dict[str, 
         info["keyword_hits"] = dict(sorted(hits.items(), key=lambda x: x[1], reverse=True)[:25])
 
         info["snippet"] = text[:1200]
-        info["text"] = text[:28000]
+        info["text"] = text[:32000]
         info["requirements"] = _extract_requirements(text)
+        info["notable_sentences"] = _collect_notable_sentences(text, limit=18)
 
     except Exception as e:
         info["error"] = f"DOCX read failed: {e}"
@@ -693,6 +731,8 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
     text_blobs: list[str] = []
     strict_reqs: list[str] = []
     loose_reqs: list[str] = []
+    notable_sentences: list[str] = []
+    headings_seen: list[str] = []
 
     for cat in ["forms", "prelims", "addenda", "specs", "documents", "pdfs"]:
         for item in sections.get(cat, []):
@@ -707,7 +747,10 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
             strict_reqs.extend(req.get("strict", []) or [])
             loose_reqs.extend(req.get("loose", []) or [])
 
-    merged = "\n\n".join(text_blobs)[:200000]
+            notable_sentences.extend(ex.get("notable_sentences", []) or [])
+            headings_seen.extend(ex.get("headings", []) or [])
+
+    merged = "\n\n".join(text_blobs)[:220000]
     merged_lc = merged.lower()
 
     tender_return = _find_evidence(merged, TENDER_RETURN_PATTERNS, max_items=10)
@@ -741,13 +784,14 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
             if k in seen:
                 continue
             seen.add(k)
-            out.append(x2[:340])
+            out.append(x2[:380])
             if len(out) >= limit:
                 break
         return out
 
     strict_clean = dedup_clean(strict_reqs, 18)
-    loose_clean = dedup_clean(loose_reqs, 14)
+    loose_clean = dedup_clean(loose_reqs, 16)
+    notable_clean = dedup_clean(notable_sentences, 24)
 
     constraints: list[str] = []
     for bucket, needles in RISK_BUCKETS.items():
@@ -765,7 +809,7 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
         if best_ev:
             constraints.append(f"{bucket}: {best_ev}")
 
-        if len(constraints) >= 10:
+        if len(constraints) >= 12:
             break
 
     headline_deadline = _best_line_from_evidence(tender_return) or (sorted(date_candidates)[0] if date_candidates else None)
@@ -810,38 +854,32 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
     if headline_ins:
         executive_lines.append(f"Insurance: {headline_ins}")
 
-    if not executive_lines:
-        executive_lines.append("No clear commercial headline terms detected from the first-pass scan.")
+    if not executive_lines and notable_clean:
+        executive_lines.extend(notable_clean[:4])
 
-    overview_parts: list[str] = []
-    if headline_deadline:
-        overview_parts.append(f"The tender appears to close on {headline_deadline}.")
-    if headline_submission:
-        overview_parts.append(f"Submission instructions indicate {headline_submission.lower()}.")
-    if headline_prog:
-        overview_parts.append(f"The programme information suggests {headline_prog.lower()}.")
-    if headline_hours:
-        overview_parts.append(f"Access or working hour constraints indicate {headline_hours.lower()}.")
-    if not overview_parts:
-        overview_parts.append("The pack has been scanned and the strongest commercial and logistical indicators are summarised below.")
+    general_summary = " ".join(notable_clean[:6]) if notable_clean else "The pack has been scanned and the main items of estimator relevance are summarised below."
+    scope_summary = " ".join(notable_clean[6:10]) if len(notable_clean) > 6 else ""
+    delivery_summary = " ".join(constraints[:5]) if constraints else "No strong delivery or logistics constraints were confidently extracted."
 
-    commercial_summary_parts: list[str] = []
+    commercial_parts: list[str] = []
     if headline_ld:
-        commercial_summary_parts.append(f"Liquidated damages appear to be referenced: {headline_ld}.")
+        commercial_parts.append(f"Liquidated damages appear to be referenced: {headline_ld}.")
     if headline_ret:
-        commercial_summary_parts.append(f"Retention provisions appear to be referenced: {headline_ret}.")
+        commercial_parts.append(f"Retention provisions appear to be referenced: {headline_ret}.")
     if headline_ins:
-        commercial_summary_parts.append(f"Insurance requirements appear to be referenced: {headline_ins}.")
-    if not commercial_summary_parts:
-        commercial_summary_parts.append("No strong commercial headline terms were confidently extracted beyond the core tender instructions.")
+        commercial_parts.append(f"Insurance requirements appear to be referenced: {headline_ins}.")
+    if headline_submission:
+        commercial_parts.append(f"Submission route appears to be: {headline_submission}.")
+    commercial_summary = " ".join(commercial_parts) or "Standard commercial headline items were not all clearly identifiable from the scanned material."
 
-    pricing_watchouts = strict_clean[:8] if strict_clean else constraints[:8]
+    pricing_watchouts = strict_clean[:8] if strict_clean else notable_clean[:8]
+    project_specific_notes = notable_clean[:10]
 
-    clarifications = missing[:]
-    if not clarifications and not submission:
-        clarifications.append("Confirm tender submission route and any file size or naming constraints.")
-    if not clarifications and not headline_prog:
-        clarifications.append("Confirm programme duration, milestones, and any phased handover requirements.")
+    queries = missing[:]
+    if not queries and not headline_submission:
+        queries.append("Confirm tender submission route and any file size, naming, or portal requirements.")
+    if not queries and not headline_prog:
+        queries.append("Confirm programme duration, milestones, sectional completion requirements, and any phased handovers.")
 
     acc_short: list[str] = []
     for x in (accreditations or [])[:12]:
@@ -855,16 +893,35 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
         if len(acc_short) >= 6:
             break
 
+    headings_short: list[str] = []
+    seen_headings: set[str] = set()
+    for h in headings_seen:
+        h2 = _normalize_line(h)
+        if not h2:
+            continue
+        hk = h2.lower()
+        if hk in seen_headings:
+            continue
+        seen_headings.add(hk)
+        headings_short.append(h2[:180])
+        if len(headings_short) >= 16:
+            break
+
     return {
         "title": "Tender Pack Summary",
-        "executive_summary": "EXECUTIVE SUMMARY\n" + "\n".join([f"• {x}" for x in executive_lines]),
-        "overview": " ".join(overview_parts),
-        "commercial_summary": " ".join(commercial_summary_parts),
-        "programme_access_summary": " ".join(constraints[:4]) if constraints else "No strong programme or access constraints were confidently extracted.",
-        "risk_summary": " ".join(constraints[:5]) if constraints else "No major delivery risks were confidently extracted from the scanned text.",
+        "executive_summary": "EXECUTIVE SUMMARY\n" + "\n".join([f"• {x}" for x in executive_lines[:8]]) if executive_lines else "EXECUTIVE SUMMARY\n• No clear high-level headline items were confidently extracted.",
+        "general_estimator_summary": general_summary,
+        "scope_summary": scope_summary or "No separate scope summary was confidently extracted from the first-pass scan.",
+        "overview": general_summary,
+        "commercial_summary": commercial_summary,
+        "delivery_constraints_summary": delivery_summary,
+        "programme_access_summary": delivery_summary,
+        "risk_summary": " ".join(constraints[:6]) if constraints else "No major delivery or commercial risks were confidently extracted from the scanned text.",
         "submission_summary": headline_submission or "Submission method was not confidently extracted.",
+        "project_specific_notes": project_specific_notes,
         "pricing_watchouts": pricing_watchouts,
-        "clarifications": clarifications[:10],
+        "queries_and_clarifications": queries[:12],
+        "clarifications": queries[:12],
         "key_facts": {
             "deadline_or_key_date": headline_deadline,
             "submission_route": headline_submission,
@@ -877,9 +934,14 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
         },
         "dates_found": sorted(date_candidates)[:40],
         "constraints": constraints,
+        "requirements_critical": strict_clean,
+        "requirements_other": loose_clean,
         "requirements_strict": strict_clean,
         "requirements_loose": loose_clean,
+        "missing_or_unclear": missing,
         "missing": missing,
+        "source_headings": headings_short,
+        "notable_points_seed": notable_clean[:18],
         "sources_scanned": len(text_blobs),
         "evidence": {
             "tender_return_candidates": [x.get("match") for x in (tender_return or [])[:4] if x.get("match")],
@@ -890,6 +952,7 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
             "liquidated_damages_candidates": [x.get("match") for x in (ld or [])[:4] if x.get("match")],
             "insurance_candidates": [x.get("match") for x in (insurance or [])[:4] if x.get("match")],
             "accreditations_candidates": acc_short[:6],
+            "notable_points": notable_clean[:12],
         },
     }
 
@@ -906,7 +969,19 @@ def collect_extracted_text(sections: dict[str, list[dict[str, Any]]], max_chars:
             if isinstance(text, str) and text.strip():
                 clean = _clean_text(text)
                 if clean and not _looks_irrelevant(clean[:1200]):
-                    parts.append(f"FILE: {file_name}\n{clean}")
+                    heading_block = ""
+                    if isinstance(ex.get("headings"), list) and ex["headings"]:
+                        heading_block = "HEADINGS: " + " | ".join(_normalize_line(h) for h in ex["headings"][:10] if _normalize_line(h))
+                    notable_block = ""
+                    if isinstance(ex.get("notable_sentences"), list) and ex["notable_sentences"]:
+                        notable_block = "NOTABLE EXTRACTS:\n" + "\n".join(f"- {x}" for x in ex["notable_sentences"][:10] if _normalize_line(x))
+                    block = f"FILE: {file_name}\n"
+                    if heading_block:
+                        block += heading_block + "\n"
+                    if notable_block:
+                        block += notable_block + "\n"
+                    block += clean
+                    parts.append(block)
 
             for sh in ex.get("sheets", [])[:10] if isinstance(ex.get("sheets"), list) else []:
                 if not isinstance(sh, dict):
@@ -939,58 +1014,61 @@ def ai_enhance_briefing(briefing: dict[str, Any], source_text: str) -> dict[str,
         "briefing_seed": {
             "title": briefing.get("title", "Tender Pack Summary"),
             "executive_summary": briefing.get("executive_summary", ""),
+            "general_estimator_summary": briefing.get("general_estimator_summary", ""),
+            "scope_summary": briefing.get("scope_summary", ""),
             "overview": briefing.get("overview", ""),
             "commercial_summary": briefing.get("commercial_summary", ""),
-            "programme_access_summary": briefing.get("programme_access_summary", ""),
+            "delivery_constraints_summary": briefing.get("delivery_constraints_summary", ""),
             "risk_summary": briefing.get("risk_summary", ""),
             "submission_summary": briefing.get("submission_summary", ""),
+            "project_specific_notes": briefing.get("project_specific_notes", [])[:OPENAI_SEED_TEXT_MAX_ITEMS],
+            "pricing_watchouts": briefing.get("pricing_watchouts", [])[:OPENAI_SEED_TEXT_MAX_ITEMS],
+            "queries_and_clarifications": briefing.get("queries_and_clarifications", [])[:OPENAI_SEED_TEXT_MAX_ITEMS],
+            "requirements_critical": briefing.get("requirements_critical", [])[:OPENAI_SEED_TEXT_MAX_ITEMS],
+            "requirements_other": briefing.get("requirements_other", [])[:OPENAI_SEED_TEXT_MAX_ITEMS],
+            "constraints": briefing.get("constraints", [])[:OPENAI_SEED_TEXT_MAX_ITEMS],
             "key_facts": briefing.get("key_facts", {}),
             "dates_found": briefing.get("dates_found", [])[:20],
-            "constraints": briefing.get("constraints", [])[:20],
-            "requirements_strict": briefing.get("requirements_strict", [])[:20],
-            "requirements_loose": briefing.get("requirements_loose", [])[:20],
-            "pricing_watchouts": briefing.get("pricing_watchouts", [])[:20],
-            "clarifications": briefing.get("clarifications", [])[:20],
-            "missing": briefing.get("missing", [])[:20],
+            "missing_or_unclear": briefing.get("missing_or_unclear", [])[:12],
+            "source_headings": briefing.get("source_headings", [])[:16],
+            "notable_points_seed": briefing.get("notable_points_seed", [])[:16],
         },
         "source_text": source_text,
     }
 
     system_prompt = """
-You are a senior UK construction estimator preparing a professional client-facing tender summary.
+You are a senior UK construction estimator preparing a professional client-facing tender pack summary.
 
 You will receive:
 1. A rough machine-generated seed summary.
-2. Raw extracted text from uploaded tender documents.
+2. Broad extracted text from uploaded tender documents.
 
-Your task:
-Rewrite everything into a polished, professional, commercially useful summary suitable to show to a client.
+Your job:
+Create a polished, professional summary that captures the important contents of the pack for an estimator.
 
-Critical rules:
-- Use only the information supported by the supplied material.
-- Write in clean, natural, professional English.
-- Do NOT copy broken OCR fragments, numbering strings, table noise, repeated fragments, or malformed schedule rows.
-- Ignore gibberish, partial clauses, duplicated wording, and extraction artefacts.
+Critical instructions:
+- Summarise broadly. Do NOT limit yourself to a narrow preset agenda.
+- Include standard tender return / commercial items where present, but also surface important project-specific matters even if they do not fit standard headings.
+- Capture anything material to pricing, scope understanding, methodology, sequencing, coordination, logistics, prelims, design responsibility, assumptions, exclusions, surveys, access, occupation, protection, testing, commissioning, warranties, programme, compliance, risk, submission, and unusual obligations.
+- Ignore OCR garbage, broken numbering fragments, corrupted tables, and repeated junk.
 - Prefer clarity over completeness.
-- If a point is unclear or weakly supported, omit it.
-- Do NOT mention filenames, OCR, extraction issues, regex, prompts, models, or source processing.
-- Do NOT output rough notes.
-- Rephrase into proper prose and concise useful bullet points where suitable.
-- Focus on commercially relevant issues: deadline, submission route, programme, working hours, access, LDs, retention, insurance, accreditations, key risks, logistics, permits, asbestos, isolations, temporary works, waste, and clarifications.
-- Keep requirements only if they affect pricing, delivery, logistics, compliance, tender return, or commercial risk.
-- If exact figures are unclear, do not invent them.
+- If something is weakly supported or unclear, note that it is unclear or omit it.
+- Do NOT mention extraction, OCR, prompts, AI, filenames, or source handling.
+- Write clean professional English suitable for client-facing output.
 
 Return STRICT JSON with this exact structure:
 {
   "title": "string",
   "executive_summary": "string",
-  "overview": "string",
+  "general_estimator_summary": "string",
+  "scope_summary": "string",
   "commercial_summary": "string",
-  "programme_access_summary": "string",
+  "delivery_constraints_summary": "string",
   "risk_summary": "string",
   "submission_summary": "string",
+  "project_specific_notes": ["..."],
   "pricing_watchouts": ["..."],
-  "clarifications": ["..."],
+  "queries_and_clarifications": ["..."],
   "key_facts": {
     "deadline_or_key_date": "string or null",
     "submission_route": "string or null",
@@ -1001,10 +1079,10 @@ Return STRICT JSON with this exact structure:
     "insurance_levels": "string or null",
     "accreditations": ["..."]
   },
+  "requirements_critical": ["..."],
+  "requirements_other": ["..."],
   "constraints": ["..."],
-  "requirements_strict": ["..."],
-  "requirements_loose": ["..."],
-  "missing": ["..."]
+  "missing_or_unclear": ["..."]
 }
 """
 
@@ -1012,7 +1090,7 @@ Return STRICT JSON with this exact structure:
         resp = openai_client.chat.completions.create(
             model=OPENAI_MODEL,
             temperature=0.0,
-            timeout=max(OPENAI_TIMEOUT_SEC, 45),
+            timeout=max(OPENAI_TIMEOUT_SEC, 60),
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -1028,38 +1106,47 @@ Return STRICT JSON with this exact structure:
         enhanced = {
             "title": parsed.get("title") or briefing.get("title") or "Tender Pack Summary",
             "executive_summary": parsed.get("executive_summary") or briefing.get("executive_summary") or "",
-            "overview": parsed.get("overview") or briefing.get("overview") or "",
+            "general_estimator_summary": parsed.get("general_estimator_summary") or briefing.get("general_estimator_summary") or briefing.get("overview") or "",
+            "scope_summary": parsed.get("scope_summary") or briefing.get("scope_summary") or "",
+            "overview": parsed.get("general_estimator_summary") or parsed.get("scope_summary") or briefing.get("overview") or "",
             "commercial_summary": parsed.get("commercial_summary") or briefing.get("commercial_summary") or "",
-            "programme_access_summary": parsed.get("programme_access_summary") or briefing.get("programme_access_summary") or "",
+            "delivery_constraints_summary": parsed.get("delivery_constraints_summary") or briefing.get("delivery_constraints_summary") or briefing.get("programme_access_summary") or "",
+            "programme_access_summary": parsed.get("delivery_constraints_summary") or briefing.get("delivery_constraints_summary") or briefing.get("programme_access_summary") or "",
             "risk_summary": parsed.get("risk_summary") or briefing.get("risk_summary") or "",
             "submission_summary": parsed.get("submission_summary") or briefing.get("submission_summary") or "",
-            "pricing_watchouts": _trim_list(parsed.get("pricing_watchouts"), 10, 340) or briefing.get("pricing_watchouts", []),
-            "clarifications": _trim_list(parsed.get("clarifications"), 10, 340) or briefing.get("clarifications", []),
+            "project_specific_notes": _trim_list(parsed.get("project_specific_notes"), 12, 380) or briefing.get("project_specific_notes", []),
+            "pricing_watchouts": _trim_list(parsed.get("pricing_watchouts"), 12, 380) or briefing.get("pricing_watchouts", []),
+            "queries_and_clarifications": _trim_list(parsed.get("queries_and_clarifications"), 12, 380) or briefing.get("queries_and_clarifications", []) or briefing.get("clarifications", []),
+            "clarifications": _trim_list(parsed.get("queries_and_clarifications"), 12, 380) or briefing.get("clarifications", []),
             "key_facts": {
-                "deadline_or_key_date": (parsed.get("key_facts") or {}).get("deadline_or_key_date") or (briefing.get("key_facts") or {}).get("deadline_or_key_date"),
-                "submission_route": (parsed.get("key_facts") or {}).get("submission_route") or (briefing.get("key_facts") or {}).get("submission_route"),
-                "programme_duration": (parsed.get("key_facts") or {}).get("programme_duration") or (briefing.get("key_facts") or {}).get("programme_duration"),
-                "working_hours": (parsed.get("key_facts") or {}).get("working_hours") or (briefing.get("key_facts") or {}).get("working_hours"),
-                "retention": (parsed.get("key_facts") or {}).get("retention") or (briefing.get("key_facts") or {}).get("retention"),
-                "liquidated_damages": (parsed.get("key_facts") or {}).get("liquidated_damages") or (briefing.get("key_facts") or {}).get("liquidated_damages"),
-                "insurance_levels": (parsed.get("key_facts") or {}).get("insurance_levels") or (briefing.get("key_facts") or {}).get("insurance_levels"),
+                "deadline_or_key_date": _trim_string((parsed.get("key_facts") or {}).get("deadline_or_key_date"), 280) or (briefing.get("key_facts") or {}).get("deadline_or_key_date"),
+                "submission_route": _trim_string((parsed.get("key_facts") or {}).get("submission_route"), 280) or (briefing.get("key_facts") or {}).get("submission_route"),
+                "programme_duration": _trim_string((parsed.get("key_facts") or {}).get("programme_duration"), 280) or (briefing.get("key_facts") or {}).get("programme_duration"),
+                "working_hours": _trim_string((parsed.get("key_facts") or {}).get("working_hours"), 280) or (briefing.get("key_facts") or {}).get("working_hours"),
+                "retention": _trim_string((parsed.get("key_facts") or {}).get("retention"), 280) or (briefing.get("key_facts") or {}).get("retention"),
+                "liquidated_damages": _trim_string((parsed.get("key_facts") or {}).get("liquidated_damages"), 280) or (briefing.get("key_facts") or {}).get("liquidated_damages"),
+                "insurance_levels": _trim_string((parsed.get("key_facts") or {}).get("insurance_levels"), 280) or (briefing.get("key_facts") or {}).get("insurance_levels"),
                 "accreditations": _trim_list((parsed.get("key_facts") or {}).get("accreditations"), 6, 220) or (briefing.get("key_facts") or {}).get("accreditations", []),
             },
             "dates_found": briefing.get("dates_found", []),
-            "constraints": _trim_list(parsed.get("constraints"), 10, 340) or briefing.get("constraints", []),
-            "requirements_strict": _trim_list(parsed.get("requirements_strict"), 14, 340) or briefing.get("requirements_strict", []),
-            "requirements_loose": _trim_list(parsed.get("requirements_loose"), 12, 340) or briefing.get("requirements_loose", []),
-            "missing": _trim_list(parsed.get("missing"), 10, 220) or briefing.get("missing", []),
+            "constraints": _trim_list(parsed.get("constraints"), 12, 380) or briefing.get("constraints", []),
+            "requirements_critical": _trim_list(parsed.get("requirements_critical"), 16, 380) or briefing.get("requirements_critical", []) or briefing.get("requirements_strict", []),
+            "requirements_other": _trim_list(parsed.get("requirements_other"), 16, 380) or briefing.get("requirements_other", []) or briefing.get("requirements_loose", []),
+            "requirements_strict": _trim_list(parsed.get("requirements_critical"), 16, 380) or briefing.get("requirements_strict", []),
+            "requirements_loose": _trim_list(parsed.get("requirements_other"), 16, 380) or briefing.get("requirements_loose", []),
+            "missing_or_unclear": _trim_list(parsed.get("missing_or_unclear"), 12, 280) or briefing.get("missing_or_unclear", []) or briefing.get("missing", []),
+            "missing": _trim_list(parsed.get("missing_or_unclear"), 12, 280) or briefing.get("missing", []),
+            "source_headings": briefing.get("source_headings", []),
+            "notable_points_seed": briefing.get("notable_points_seed", []),
             "sources_scanned": briefing.get("sources_scanned", 0),
             "evidence": briefing.get("evidence", {}),
             "ai_used": True,
         }
         return enhanced
 
-    except Exception as e:
+    except Exception:
         print("OPENAI ENHANCE ERROR:")
         traceback.print_exc()
-        print(e)
         return briefing
 
 
@@ -1123,16 +1210,19 @@ def build_pdf_report(report: dict[str, Any]) -> bytes:
     story.append(Spacer(1, 4 * mm))
 
     story.append(Paragraph("Executive Summary", styles["SectionHead"]))
-    add_paragraph(briefing.get("executive_summary") or briefing.get("overview") or "")
+    add_paragraph(briefing.get("executive_summary") or briefing.get("general_estimator_summary") or briefing.get("overview") or "")
 
-    story.append(Paragraph("Overview", styles["SectionHead"]))
-    add_paragraph(briefing.get("overview") or "")
+    story.append(Paragraph("General Estimator Summary", styles["SectionHead"]))
+    add_paragraph(briefing.get("general_estimator_summary") or briefing.get("overview") or "")
+
+    story.append(Paragraph("Scope Summary", styles["SectionHead"]))
+    add_paragraph(briefing.get("scope_summary") or "")
 
     story.append(Paragraph("Commercial Summary", styles["SectionHead"]))
     add_paragraph(briefing.get("commercial_summary") or "")
 
-    story.append(Paragraph("Programme and Access", styles["SectionHead"]))
-    add_paragraph(briefing.get("programme_access_summary") or "")
+    story.append(Paragraph("Delivery / Constraints", styles["SectionHead"]))
+    add_paragraph(briefing.get("delivery_constraints_summary") or briefing.get("programme_access_summary") or "")
 
     story.append(Paragraph("Risk Summary", styles["SectionHead"]))
     add_paragraph(briefing.get("risk_summary") or "")
@@ -1158,20 +1248,23 @@ def build_pdf_report(report: dict[str, Any]) -> bytes:
         facts.append("Accreditations: " + ", ".join(key_facts["accreditations"][:6]))
     add_bullets(facts or ["No key facts were confidently extracted."])
 
+    story.append(Paragraph("Project-Specific Notes", styles["SectionHead"]))
+    add_bullets(briefing.get("project_specific_notes") or ["No project-specific notes were confidently extracted."])
+
     story.append(Paragraph("Pricing Watchouts", styles["SectionHead"]))
     add_bullets(briefing.get("pricing_watchouts") or ["No pricing watchouts were confidently extracted."])
 
     story.append(Paragraph("Key Constraints", styles["SectionHead"]))
     add_bullets(briefing.get("constraints") or ["No strong constraints were confidently extracted."])
 
-    story.append(Paragraph("Mandatory Requirements", styles["SectionHead"]))
-    add_bullets((briefing.get("requirements_strict") or [])[:12] or ["No strong mandatory requirements were confidently extracted."])
+    story.append(Paragraph("Critical Requirements", styles["SectionHead"]))
+    add_bullets((briefing.get("requirements_critical") or briefing.get("requirements_strict") or [])[:12] or ["No strong critical requirements were confidently extracted."])
 
-    story.append(Paragraph("Other Submission Requests", styles["SectionHead"]))
-    add_bullets((briefing.get("requirements_loose") or [])[:10] or ["No other clear submission requests were confidently extracted."])
+    story.append(Paragraph("Other Requirements", styles["SectionHead"]))
+    add_bullets((briefing.get("requirements_other") or briefing.get("requirements_loose") or [])[:12] or ["No other clear requirements were confidently extracted."])
 
     story.append(Paragraph("Clarifications / Queries to Raise", styles["SectionHead"]))
-    add_bullets(briefing.get("clarifications") or briefing.get("missing") or ["No additional clarifications suggested."])
+    add_bullets(briefing.get("queries_and_clarifications") or briefing.get("clarifications") or briefing.get("missing_or_unclear") or ["No additional clarifications suggested."])
 
     doc.build(story)
     return buf.getvalue()
