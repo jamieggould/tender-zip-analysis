@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
 import csv
+import json
 import shutil
 import tempfile
 import zipfile
@@ -18,12 +20,17 @@ from starlette.requests import Request
 from pypdf import PdfReader
 from openpyxl import load_workbook
 from docx import Document
+from openai import OpenAI
 
 
 app = FastAPI(title="Tender Pack Summary")
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="templates")
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 
 # ---------------- ZIP safety ----------------
@@ -40,7 +47,6 @@ def safe_extract_zip(zip_path: Path, extract_to: Path, max_files: int = 5000) ->
             if m.is_dir():
                 continue
 
-            # normalize zip paths for safety
             zname = (m.filename or "").replace("\\", "/").lstrip("/")
             parts = [p for p in zname.split("/") if p not in ("", ".", "..")]
             safe_name = "/".join(parts) if parts else Path(m.filename).name
@@ -79,11 +85,6 @@ def _has_any(haystack: str, words: list[str]) -> bool:
 
 
 def classify_file(p: Path, display: str | None = None) -> str:
-    """
-    IMPORTANT FIX:
-    - classify using BOTH filename and its relative path (display),
-      because folder uploads often contain keywords in folder names.
-    """
     ext = p.suffix.lower()
     name = p.name.lower()
     full = (display or p.as_posix()).lower()
@@ -210,21 +211,11 @@ REQ_LOOSE_RE = re.compile(r"\b(should|please|requested|provide|submit|include|co
 
 SENT_SPLIT_RE = re.compile(r"(?<=[\.\!\?])\s+|\n+")
 
-TENDER_CONTEXT_WORDS = [
-    "tender", "return", "submit", "submission", "deadline", "closing date",
-    "contract", "conditions", "jct", "nec", "scope", "works", "employer",
-    "pricing", "boq", "rates", "programme", "duration", "working hours",
-    "insurance", "retention", "liquidated damages", "lad", "ld",
-    "site", "access", "logistics", "permit", "licence", "hoarding",
-    "demolition", "strip", "soft strip", "asbestos", "temporary works",
-]
 COMMERCIAL_SIGNAL_RE = re.compile(r"(£\s?\d|%\b|\bweeks?\b|\bmonths?\b|\b\d{1,2}[:.]\d{2}\b)", re.I)
-
 IRRELEVANT_DOC_HINTS = [
     "breeam", "credit", "wat 01", "assessor", "calculator", "guidance",
     "performance levels", "this document represents guidance",
 ]
-
 _REQUIREMENT_FLOOD_HINTS = [
     "designer", "architect", "design intent", "building regulations",
     "confidential", "not be disclosed", "treated as confidential",
@@ -233,22 +224,11 @@ _REQUIREMENT_FLOOD_HINTS = [
 
 
 def _clean_text(s: str) -> str:
-    """
-    IMPORTANT FIX:
-    - PDFs often return line-broken fragments.
-    - This normalizes hyphenation and joins single newlines.
-    """
-    s = (s or "").replace("\x00", " ")
-
-    # fix hyphenation across line breaks: "informa-\ntion" -> "information"
+    s = (s or "").replace("\x00", "")
     s = re.sub(r"(\w)-\n(\w)", r"\1\2", s)
-
-    # normalize newlines: keep paragraph breaks, but join single line wraps
     s = s.replace("\r\n", "\n").replace("\r", "\n")
     s = re.sub(r"\n{3,}", "\n\n", s)
-    s = re.sub(r"(?<!\n)\n(?!\n)", " ", s)  # single newline -> space
-
-    # collapse whitespace
+    s = re.sub(r"(?<!\n)\n(?!\n)", " ", s)
     s = re.sub(r"[ \t]+", " ", s)
     s = re.sub(r"\n{3,}", "\n\n", s)
     return s.strip()
@@ -264,19 +244,14 @@ def _looks_irrelevant(text: str) -> bool:
 
 
 def _looks_like_schedule_row(s: str) -> bool:
-    """
-    Detect 'schedule/table' style rows that produce nonsense bullets.
-    """
     s2 = _normalize_line(s)
     if not s2:
         return True
     if s2.count("|") >= 2:
         return True
-    # lots of numbers/codes packed together
     tokens = re.findall(r"\b[A-Z]{1,4}[-_ ]?\d{1,6}[A-Z]?\b", s2)
     if len(tokens) >= 5:
         return True
-    # super dense numeric content
     digits = sum(1 for c in s2 if c.isdigit())
     if digits >= 18 and len(s2) < 140:
         return True
@@ -337,9 +312,6 @@ def _sentences_around(text: str, idx: int, max_sentences: int = 2) -> str:
 
 
 def _sentence_score(s: str) -> int:
-    """
-    Higher = more estimator-useful.
-    """
     s_l = s.lower()
     score = 0
 
@@ -358,7 +330,6 @@ def _sentence_score(s: str) -> int:
     if any(h in s_l for h in _REQUIREMENT_FLOOD_HINTS):
         score -= 5
 
-    # penalise short / fragmenty
     if len(s) < 90:
         score -= 2
     if s.count(" ") < 12:
@@ -367,19 +338,12 @@ def _sentence_score(s: str) -> int:
     return score
 
 
-def _extract_requirements(text: str, max_lines: int = 28) -> dict[str, list[str]]:
-    """
-    IMPORTANT FIX:
-    - Extract complete sentences (or 2-sentence chunks), not PDF line fragments.
-    - Rank by estimator usefulness.
-    """
+def _extract_requirements(text: str, max_lines: int = 20) -> dict[str, list[str]]:
     if not text:
         return {"strict": [], "loose": []}
 
-    # sentence candidates
     sentences = _split_sentences(text)
-
-    candidates: list[tuple[int, str, str]] = []  # (score, bucket, text)
+    candidates: list[tuple[int, str, str]] = []
 
     def clean(s: str) -> str | None:
         s2 = _normalize_line(s)
@@ -389,7 +353,6 @@ def _extract_requirements(text: str, max_lines: int = 28) -> dict[str, list[str]
             return None
         if _looks_like_schedule_row(s2) or _is_gibberish_line(s2):
             return None
-        # drop obvious continuation fragments
         if s2[:1].islower() and not re.match(r"^(i|we)\b", s2.lower()):
             return None
         s2 = s2[:360]
@@ -406,11 +369,10 @@ def _extract_requirements(text: str, max_lines: int = 28) -> dict[str, list[str]
         elif REQ_LOOSE_RE.search(s2):
             candidates.append((_sentence_score(s2), "loose", s2))
 
-    # fallback: if strict still thin, pull 2-sentence chunks around strict matches
     if sum(1 for _, b, _ in candidates if b == "strict") < 6:
         for m in REQ_STRICT_RE.finditer(text):
             chunk = _sentences_around(text, m.start(), max_sentences=2)
-            chunk = clean(chunk) or None
+            chunk = clean(chunk)
             if not chunk:
                 continue
             candidates.append((_sentence_score(chunk), "strict", chunk))
@@ -436,10 +398,6 @@ def _extract_requirements(text: str, max_lines: int = 28) -> dict[str, list[str]
 
 
 def _find_evidence(text: str, patterns: list[str], max_items: int = 6) -> list[dict[str, str]]:
-    """
-    IMPORTANT FIX:
-    - Return full sentence context instead of raw regex fragments.
-    """
     found: list[dict[str, str]] = []
     if not text:
         return found
@@ -460,7 +418,6 @@ def _find_evidence(text: str, patterns: list[str], max_items: int = 6) -> list[d
 def _best_line_from_evidence(items: list[dict[str, str]] | None) -> str | None:
     if not items:
         return None
-    # prefer scored + commercial signal
     best: tuple[int, str] | None = None
     for it in items:
         s = _normalize_line(it.get("match") or "")
@@ -483,7 +440,6 @@ def _find_bucket_evidence(merged: str, needle: str, bucket: str, max_items: int 
         s = _sentences_around(merged, idx, max_sentences=2)
         s = _normalize_line(s)[:420]
         if s and not _looks_irrelevant(s) and not _looks_like_schedule_row(s) and not _is_gibberish_line(s):
-            # keep “services” bucket honest
             sl = s.lower()
             if bucket == "Services / isolations":
                 if not any(x in sl for x in ["isolation", "isolations", "live", "disconnect", "disconnection", "divert", "diversion"]):
@@ -492,6 +448,37 @@ def _find_bucket_evidence(merged: str, needle: str, bucket: str, max_items: int 
             if _sentence_score(s) > 0 and s not in out:
                 out.append(s)
         start = idx + len(needle)
+    return out
+
+
+def _safe_json_loads(s: str) -> dict[str, Any] | None:
+    try:
+        data = json.loads(s)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return None
+
+
+def _trim_list(items: Any, limit: int = 10, width: int = 320) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for x in items:
+        if not isinstance(x, str):
+            continue
+        x2 = _normalize_line(x)[:width]
+        if not x2:
+            continue
+        k = x2.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(x2)
+        if len(out) >= limit:
+            break
     return out
 
 
@@ -539,7 +526,7 @@ def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, An
         info["date_candidates"] = sorted(dates)[:30]
 
         info["snippet"] = text[:1200]
-        info["text"] = text[:22000]  # internal use only
+        info["text"] = text[:22000]
         info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
@@ -562,7 +549,6 @@ def extract_docx_info(path: Path, max_paras: int = DOCX_MAX_PARAS) -> dict[str, 
             for row in table.rows[:DOCX_MAX_TABLE_ROWS]:
                 cells = [c.text.strip() for c in row.cells if c.text and c.text.strip()]
                 if cells:
-                    # docx tables can be useful, but they also create fragments
                     table_lines.append(" ".join(cells)[:420])
 
         text = _clean_text("\n".join(paras + table_lines))
@@ -584,7 +570,7 @@ def extract_docx_info(path: Path, max_paras: int = DOCX_MAX_PARAS) -> dict[str, 
         info["keyword_hits"] = dict(sorted(hits.items(), key=lambda x: x[1], reverse=True)[:25])
 
         info["snippet"] = text[:1200]
-        info["text"] = text[:22000]  # internal use only
+        info["text"] = text[:22000]
         info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
@@ -682,12 +668,6 @@ def extract_by_type(path: Path, category: str) -> dict[str, Any]:
 
 
 def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
-    """
-    IMPORTANT FIX:
-    - Build an estimator-readable briefing from COMPLETE sentences only.
-    - No "random fragments" and no chopped table rows.
-    - Remove "from file X" references (you asked for readability).
-    """
     text_blobs: list[str] = []
     strict_reqs: list[str] = []
     loose_reqs: list[str] = []
@@ -744,11 +724,9 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
                 break
         return out
 
-    # pick the best requirements only (no fragments)
     strict_clean = dedup_clean(strict_reqs, 18)
     loose_clean = dedup_clean(loose_reqs, 14)
 
-    # risk / constraints (bucketed)
     constraints: list[str] = []
     for bucket, needles in RISK_BUCKETS.items():
         if not any(n in merged_lc for n in needles):
@@ -776,7 +754,6 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
     headline_hours = _best_line_from_evidence(working_hours)
     headline_ins = _best_line_from_evidence(insurance)
 
-    # missing signals (only if we truly couldn’t find anything)
     missing: list[str] = []
     if not tender_return and not date_candidates:
         missing.append("Tender return date / deadline not found")
@@ -795,7 +772,6 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
     if not accreditations:
         missing.append("Accreditations (CHAS/SMAS/etc) not found")
 
-    # estimator-ready executive bullets (short + clear)
     executive_lines: list[str] = []
     if headline_deadline:
         executive_lines.append(f"Deadline / key date: {headline_deadline}")
@@ -815,7 +791,6 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
     if not executive_lines:
         executive_lines.append("No clear commercial headline terms detected from the first-pass scan.")
 
-    # Accreditations (keep only clean ones)
     acc_short: list[str] = []
     for x in (accreditations or [])[:12]:
         m = _normalize_line(x.get("match") or "")
@@ -846,7 +821,6 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
         "requirements_loose": loose_clean,
         "missing": missing,
         "sources_scanned": len(text_blobs),
-        # keep evidence minimal + clean (frontend can ignore)
         "evidence": {
             "tender_return_candidates": [x.get("match") for x in (tender_return or [])[:4] if x.get("match")],
             "submission_candidates": [x.get("match") for x in (submission or [])[:4] if x.get("match")],
@@ -858,6 +832,106 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
             "accreditations_candidates": acc_short[:6],
         },
     }
+
+
+def ai_enhance_briefing(briefing: dict[str, Any]) -> dict[str, Any]:
+    """
+    Optional OpenAI step.
+    Keeps your existing extraction, then asks the model to turn it into a cleaner estimator briefing.
+    If API key/model fails, it quietly falls back to the raw briefing.
+    """
+    if not openai_client:
+        return briefing
+
+    payload = {
+        "key_facts": briefing.get("key_facts", {}),
+        "dates_found": briefing.get("dates_found", [])[:12],
+        "constraints": briefing.get("constraints", [])[:10],
+        "requirements_strict": briefing.get("requirements_strict", [])[:12],
+        "requirements_loose": briefing.get("requirements_loose", [])[:10],
+        "missing": briefing.get("missing", [])[:10],
+        "evidence": briefing.get("evidence", {}),
+    }
+
+    system_prompt = """
+You are a senior UK construction estimator reviewing a tender pack.
+
+You will receive extracted evidence from tender documents.
+Your task is to turn that evidence into a clean, practical briefing for estimators.
+
+Rules:
+- Use ONLY the provided evidence.
+- Ignore broken fragments, partial sentences, or anything that does not clearly make sense.
+- Do NOT mention file names, source references, or "the evidence says".
+- Write clearly and commercially.
+- Prioritise: deadline, submission route, programme, working hours, access/logistics, LDs, retention, insurance, permits, asbestos, isolations, waste, temporary works.
+- Keep requirements estimator-relevant. Do not include generic legal/design fluff unless it clearly affects cost, risk, logistics, programme, or compliance.
+- If a field is unclear, leave it null or omit it from lists.
+- Return STRICT JSON only with this exact structure:
+
+{
+  "executive_summary": "string",
+  "key_facts": {
+    "deadline_or_key_date": "string or null",
+    "submission_route": "string or null",
+    "programme_duration": "string or null",
+    "working_hours": "string or null",
+    "retention": "string or null",
+    "liquidated_damages": "string or null",
+    "insurance_levels": "string or null",
+    "accreditations": ["..."]
+  },
+  "constraints": ["..."],
+  "requirements_strict": ["..."],
+  "requirements_loose": ["..."],
+  "missing": ["..."]
+}
+"""
+
+    user_prompt = json.dumps(payload, ensure_ascii=False)
+
+    try:
+        resp = openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            temperature=0.1,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+
+        content = resp.choices[0].message.content or ""
+        parsed = _safe_json_loads(content)
+        if not parsed:
+            return briefing
+
+        enhanced = {
+            "executive_summary": parsed.get("executive_summary") or briefing.get("executive_summary"),
+            "key_facts": {
+                "deadline_or_key_date": (parsed.get("key_facts") or {}).get("deadline_or_key_date") or (briefing.get("key_facts") or {}).get("deadline_or_key_date"),
+                "submission_route": (parsed.get("key_facts") or {}).get("submission_route") or (briefing.get("key_facts") or {}).get("submission_route"),
+                "programme_duration": (parsed.get("key_facts") or {}).get("programme_duration") or (briefing.get("key_facts") or {}).get("programme_duration"),
+                "working_hours": (parsed.get("key_facts") or {}).get("working_hours") or (briefing.get("key_facts") or {}).get("working_hours"),
+                "retention": (parsed.get("key_facts") or {}).get("retention") or (briefing.get("key_facts") or {}).get("retention"),
+                "liquidated_damages": (parsed.get("key_facts") or {}).get("liquidated_damages") or (briefing.get("key_facts") or {}).get("liquidated_damages"),
+                "insurance_levels": (parsed.get("key_facts") or {}).get("insurance_levels") or (briefing.get("key_facts") or {}).get("insurance_levels"),
+                "accreditations": _trim_list((parsed.get("key_facts") or {}).get("accreditations"), 6, 220) or (briefing.get("key_facts") or {}).get("accreditations", []),
+            },
+            "dates_found": briefing.get("dates_found", []),
+            "constraints": _trim_list(parsed.get("constraints"), 10, 320) or briefing.get("constraints", []),
+            "requirements_strict": _trim_list(parsed.get("requirements_strict"), 14, 320) or briefing.get("requirements_strict", []),
+            "requirements_loose": _trim_list(parsed.get("requirements_loose"), 12, 320) or briefing.get("requirements_loose", []),
+            "missing": _trim_list(parsed.get("missing"), 10, 220) or briefing.get("missing", []),
+            "sources_scanned": briefing.get("sources_scanned", 0),
+            "evidence": briefing.get("evidence", {}),
+            "ai_used": True,
+        }
+
+        return enhanced
+
+    except Exception:
+        return briefing
 
 
 def _strip_internal_fields(sections: dict[str, list[dict[str, Any]]]) -> None:
@@ -878,22 +952,27 @@ def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
+async def _save_upload_to_path(uf: UploadFile, dest: Path, max_bytes: int) -> int:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    size = 0
+    with open(dest, "wb") as f:
+        while True:
+            chunk = await uf.read(1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > max_bytes:
+                raise ValueError("File too large")
+            f.write(chunk)
+    return size
+
+
 @app.post("/api/analyse")
 async def analyse(
     zip_file: Optional[list[UploadFile]] = File(None),
     files: Optional[list[UploadFile]] = File(None),
     file: Optional[UploadFile] = File(None),
 ):
-    """
-    Accepts:
-      - one or more .zip files (will be extracted)
-      - OR many individual files (including folder uploads where uf.filename contains subfolders)
-
-    Key fix:
-      - accept multiple common multipart field names (zip_file / files / file) so the frontend can't mismatch.
-      - classify using display path (so “Registers/…” folders get detected).
-      - extract ONLY full-sentence context (no half-sentences).
-    """
     try:
         uploads: list[UploadFile] = []
         if zip_file:
@@ -919,36 +998,26 @@ async def analyse(
             uploaded_names: list[str] = []
             scanned_paths: list[tuple[Path, str]] = []
 
-            # 1) ingest: save uploads, unzip zips
             for uf in uploads:
                 if not uf.filename:
                     continue
 
                 uploaded_names.append(uf.filename)
 
-                content = await uf.read()
-                if len(content) > max_bytes:
-                    return JSONResponse(
-                        {"error": f"File too large (limit 300MB): {uf.filename}"},
-                        status_code=400,
-                    )
-
-                # ZIP upload
                 if uf.filename.lower().endswith(".zip"):
                     zp = tmp_path / f"upload_{len(uploaded_names)}.zip"
-                    zp.write_bytes(content)
+                    try:
+                        await _save_upload_to_path(uf, zp, max_bytes=max_bytes)
+                    except ValueError:
+                        return JSONResponse({"error": f"File too large (limit 300MB): {uf.filename}"}, status_code=400)
+
                     try:
                         extracted = safe_extract_zip(zp, extract_dir, max_files=5000)
                     except Exception as e:
-                        return JSONResponse(
-                            {"error": f"Could not extract ZIP {uf.filename}: {e}"},
-                            status_code=400,
-                        )
+                        return JSONResponse({"error": f"Could not extract ZIP {uf.filename}: {e}"}, status_code=400)
 
                     for p in extracted:
                         scanned_paths.append((p, str(p.relative_to(extract_dir)).replace("\\", "/")))
-
-                # Non-zip (including folder upload with subfolders in filename)
                 else:
                     rel = (uf.filename or "").replace("\\", "/").lstrip("/")
                     rel_path = Path(rel)
@@ -957,12 +1026,13 @@ async def analyse(
                         safe_rel = Path(Path(uf.filename).name)
 
                     op = tmp_path / safe_rel
-                    op.parent.mkdir(parents=True, exist_ok=True)
-                    op.write_bytes(content)
+                    try:
+                        await _save_upload_to_path(uf, op, max_bytes=max_bytes)
+                    except ValueError:
+                        return JSONResponse({"error": f"File too large (limit 300MB): {uf.filename}"}, status_code=400)
 
                     scanned_paths.append((op, str(safe_rel).replace("\\", "/")))
 
-            # 2) classify + extract (guard: cap total processed files)
             total_files = 0
             by_category_count: dict[str, int] = defaultdict(int)
 
@@ -986,10 +1056,9 @@ async def analyse(
             def has_cat(cat: str) -> bool:
                 return len(sections.get(cat, [])) > 0
 
-            # 3) briefing
-            briefing = extract_pack_briefing(sections)
+            raw_briefing = extract_pack_briefing(sections)
+            briefing = ai_enhance_briefing(raw_briefing)
 
-            # 4) strip internal heavy fields BEFORE responding
             _strip_internal_fields(sections)
 
             report = {
@@ -1006,6 +1075,8 @@ async def analyse(
                     "prelims_found": has_cat("prelims"),
                     "specs_found": has_cat("specs"),
                     "addenda_found": has_cat("addenda"),
+                    "ai_enabled": bool(openai_client),
+                    "ai_model": OPENAI_MODEL if openai_client else None,
                 },
                 "briefing": briefing,
                 "sections": dict(sections),
