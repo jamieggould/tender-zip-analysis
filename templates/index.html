@@ -149,6 +149,11 @@ color:rgba(15,23,42,0.88);
 border:1px solid rgba(15,23,42,0.12);
 }
 
+.btn:disabled{
+opacity:.55;
+cursor:not-allowed;
+}
+
 .upload{
 border-radius:var(--radius2);
 border:1px solid rgba(15,23,42,0.10);
@@ -172,6 +177,7 @@ cursor:pointer;
 display:flex;
 align-items:center;
 justify-content:space-between;
+gap:12px;
 }
 
 .dropzone:hover{
@@ -183,40 +189,82 @@ display:flex;
 align-items:center;
 justify-content:space-between;
 margin-bottom:10px;
+gap:12px;
 }
 
-/* ===== ONLY CHANGE MADE HERE (kept) ===== */
-
 .pre{
-  margin:0;
-  border-radius:16px;
-  border:1px solid rgba(15,23,42,0.12);
-  background:#ffffff;
-  color:#0f172a;
-  padding:20px;
-  min-height:320px;
-  max-height:560px;
-  overflow:auto;
-
-  font-size:14px;
-  line-height:1.65;
-  font-family:Inter,system-ui;
-  white-space:normal; /* key change */
+margin:0;
+border-radius:16px;
+border:1px solid rgba(15,23,42,0.12);
+background:#ffffff;
+color:#0f172a;
+padding:20px;
+min-height:320px;
+max-height:650px;
+overflow:auto;
+font-size:14px;
+line-height:1.65;
+font-family:Inter,system-ui;
+white-space:normal;
 }
 
 .pre h3{
-  margin:14px 0 8px;
-  font-size:13px;
-  letter-spacing:.06em;
-  text-transform:uppercase;
-  color:rgba(15,23,42,0.65);
+margin:16px 0 8px;
+font-size:13px;
+letter-spacing:.06em;
+text-transform:uppercase;
+color:rgba(15,23,42,0.65);
 }
-.pre ul{ margin:6px 0 12px 18px; padding:0; }
-.pre li{ margin:6px 0; }
-.pre .muted{ color:rgba(15,23,42,0.60); }
-.pre .divider{ height:1px; background:rgba(15,23,42,0.10); margin:12px 0; }
 
-/* ===================================== */
+.pre p{
+margin:0 0 10px;
+}
+
+.pre ul{
+margin:6px 0 12px 18px;
+padding:0;
+}
+
+.pre li{
+margin:6px 0;
+}
+
+.pre .muted{
+color:rgba(15,23,42,0.60);
+}
+
+.pre .divider{
+height:1px;
+background:rgba(15,23,42,0.10);
+margin:12px 0;
+}
+
+.summaryBox{
+border:1px solid rgba(15,23,42,0.08);
+background:rgba(79,70,229,0.03);
+border-radius:14px;
+padding:14px 14px 6px;
+}
+
+.factGrid{
+display:grid;
+grid-template-columns:1fr 1fr;
+gap:10px 18px;
+margin-top:12px;
+}
+
+.factItem{
+font-size:13px;
+}
+
+.factItem b{
+display:block;
+font-size:12px;
+color:rgba(15,23,42,0.58);
+margin-bottom:3px;
+text-transform:uppercase;
+letter-spacing:.04em;
+}
 
 .footer{
 margin-top:14px;
@@ -235,7 +283,6 @@ border:1px solid rgba(15,23,42,0.12);
 background:white;
 }
 
-/* tiny helpers (non-invasive) */
 .pill{
 font-size:12px;
 padding:4px 10px;
@@ -245,15 +292,18 @@ background:white;
 color:rgba(15,23,42,0.72);
 font-weight:800;
 }
+
 hr.sep{
 border:0;
 border-top:1px solid rgba(15,23,42,0.10);
 margin:14px 0;
 }
+
 .small{
 font-size:12px;
 color:var(--muted);
 }
+
 .badge{
 display:inline-block;
 padding:2px 8px;
@@ -264,8 +314,15 @@ font-weight:800;
 background:white;
 color:rgba(15,23,42,0.75);
 }
+
 .badge.ok{ border-color:rgba(22,163,74,0.30); color:rgba(22,163,74,0.90); }
 .badge.warn{ border-color:rgba(245,158,11,0.35); color:rgba(245,158,11,0.95); }
+
+@media (max-width:980px){
+.grid{grid-template-columns:1fr}
+.factGrid{grid-template-columns:1fr}
+.resultHead{align-items:flex-start;flex-direction:column}
+}
 </style>
 </head>
 
@@ -277,7 +334,7 @@ color:rgba(15,23,42,0.75);
 <div class="brand">
 
 <div class="logoWrap">
-<img class="logoImg" src="/static/logo-new.png">
+<img class="logoImg" src="/static/logo-new.png" alt="Logo">
 </div>
 
 <div>
@@ -288,9 +345,7 @@ color:rgba(15,23,42,0.75);
 </div>
 </header>
 
-
 <div class="shell">
-
 <div class="grid">
 
 <!-- LEFT -->
@@ -310,7 +365,7 @@ Upload tender files (ZIP, PDFs, Excel, Word, images) and we'll scan what's insid
 <input id="zip" class="hiddenInput" type="file" multiple webkitdirectory directory>
 
 <div id="dropzone" class="dropzone">
-Click to upload (or drag and drop)
+<span>Click to upload (or drag and drop)</span>
 <span id="fileName">No file selected</span>
 </div>
 
@@ -327,7 +382,6 @@ Click to upload (or drag and drop)
 
 </section>
 
-
 <!-- RIGHT -->
 <section class="panel">
 
@@ -338,9 +392,14 @@ Click to upload (or drag and drop)
 <span class="pill">Step 2</span>
 </div>
 
+<div class="row">
+<button class="btn secondary" onclick="downloadPdf()" id="downloadPdfBtn" disabled>
+Download PDF
+</button>
 <button class="btn secondary" onclick="downloadJson()" id="downloadBtn" disabled>
 Download JSON
 </button>
+</div>
 
 </div>
 
@@ -356,9 +415,7 @@ Upload files to generate a tender pack briefing.
 </section>
 
 </div>
-
 </div>
-
 </div>
 
 <script src="/static/app.js"></script>
@@ -369,6 +426,11 @@ Upload files to generate a tender pack briefing.
   const dz = document.getElementById("dropzone");
   const nameEl = document.getElementById("fileName");
   const out = document.getElementById("out");
+  const statusEl = document.getElementById("status");
+  const downloadBtn = document.getElementById("downloadBtn");
+  const downloadPdfBtn = document.getElementById("downloadPdfBtn");
+
+  let currentReport = null;
 
   dz.onclick = () => input.click();
 
@@ -394,10 +456,35 @@ Upload files to generate a tender pack briefing.
     nameEl.textContent = input.files.length + " files selected";
   });
 
-  // Render a nicer HTML report into #out.
-  // IMPORTANT:
-  // 1) Change <pre id="out" ...> to <div id="out" ...> in your HTML.
-  // 2) In CSS for .pre, set white-space: normal; (or use the CSS I sent earlier).
+  const esc = (x) =>
+    String(x ?? "").replace(/[&<>"']/g, (m) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    }[m]));
+
+  const badge = (ok) =>
+    ok
+      ? `<span class="badge ok">FOUND</span>`
+      : `<span class="badge warn">NOT FOUND</span>`;
+
+  const list = (items, max = 10, emptyText = "None detected.") => {
+    if (!items || !items.length) return `<div class="muted">${esc(emptyText)}</div>`;
+    const shown = items.slice(0, max);
+    const more =
+      items.length > max
+        ? `<li class="muted">… (${items.length - max} more)</li>`
+        : "";
+    return `<ul>${shown.map((x) => `<li>${esc(x)}</li>`).join("")}${more}</ul>`;
+  };
+
+  const fact = (label, value) => {
+    if (!value) return "";
+    return `<div class="factItem"><b>${esc(label)}</b><div>${esc(value)}</div></div>`;
+  };
+
   window.renderTenderReport = function (data) {
     try {
       if (!data) {
@@ -405,38 +492,15 @@ Upload files to generate a tender pack briefing.
         return;
       }
 
+      currentReport = data;
+      downloadBtn.disabled = false;
+      downloadPdfBtn.disabled = false;
+
       const s = data.summary || {};
       const b = data.briefing || {};
       const kf = b.key_facts || {};
+      const dates = b.dates_found || [];
 
-      // Basic HTML escape (prevents breaking layout / XSS)
-      const esc = (x) =>
-        String(x ?? "").replace(/[&<>"']/g, (m) => ({
-          "&": "&amp;",
-          "<": "&lt;",
-          ">": "&gt;",
-          '"': "&quot;",
-          "'": "&#39;",
-        }[m]));
-
-      const badge = (ok) =>
-        ok
-          ? `<span class="badge ok">FOUND</span>`
-          : `<span class="badge warn">NOT FOUND</span>`;
-
-      const list = (items, max = 10, emptyText = "None detected.") => {
-        if (!items || !items.length) return `<div class="muted">${esc(emptyText)}</div>`;
-        const shown = items.slice(0, max);
-        const more =
-          items.length > max
-            ? `<li class="muted">… (${items.length - max} more)</li>`
-            : "";
-        return `<ul>${shown.map((x) => `<li>${esc(x)}</li>`).join("")}${more}</ul>`;
-      };
-
-      const dates = b.dates_found || b.date_candidates || [];
-
-      // If briefing is missing entirely, show a helpful message
       if (!Object.keys(b).length) {
         out.innerHTML =
           `<h3>Tender pack report</h3>` +
@@ -447,15 +511,18 @@ Upload files to generate a tender pack briefing.
       }
 
       out.innerHTML = `
-        <h3>Tender pack briefing</h3>
+        <div class="summaryBox">
+          <h3 style="margin-top:0">Summary Page</h3>
+          <p>${esc(b.overview || b.executive_summary || "No summary returned.")}</p>
+          <p>${esc(b.commercial_summary || "")}</p>
+          <p>${esc(b.programme_access_summary || "")}</p>
+          <p>${esc(b.risk_summary || "")}</p>
+          <p>${esc(b.submission_summary || "")}</p>
+        </div>
+
         <div class="divider"></div>
 
-        <h3>Executive summary</h3>
-        <div>${esc(b.executive_summary || "No executive summary returned.")}</div>
-
-        <div class="divider"></div>
-
-        <h3>Pack content check</h3>
+        <h3>Pack Content Check</h3>
         <ul>
           <li>BOQ / Pricing: ${badge(!!s.boq_found)}</li>
           <li>Registers: ${badge(!!s.register_found)}</li>
@@ -466,47 +533,142 @@ Upload files to generate a tender pack briefing.
           <li>Addenda: ${badge(!!s.addenda_found)}</li>
         </ul>
 
+        <div class="divider"></div>
+
+        <h3>Key Facts</h3>
+        <div class="factGrid">
+          ${fact("Deadline / key date", kf.deadline_or_key_date)}
+          ${fact("Submission route", kf.submission_route)}
+          ${fact("Programme / duration", kf.programme_duration)}
+          ${fact("Working hours", kf.working_hours)}
+          ${fact("Retention", kf.retention)}
+          ${fact("LD / LADs", kf.liquidated_damages)}
+          ${fact("Insurance", kf.insurance_levels)}
+          ${fact("Accreditations", (kf.accreditations || []).join(", "))}
+        </div>
+        ${!Object.keys(kf).length ? `<div class="muted" style="margin-top:8px;">No key facts detected.</div>` : ""}
+
+        <div class="divider"></div>
+
+        <h3>Pricing Watchouts</h3>
+        ${list(b.pricing_watchouts || [], 10, "No pricing watchouts confidently extracted.")}
+
+        <h3>Key Constraints</h3>
+        ${list(b.constraints || [], 10, "No strong constraints confidently extracted.")}
+
+        <h3>Mandatory Requirements</h3>
+        ${list(b.requirements_strict || [], 12, "No strong mandatory requirements confidently extracted.")}
+
+        <h3>Other Submission Requests</h3>
+        ${list(b.requirements_loose || [], 12, "No additional submission requests confidently extracted.")}
+
+        <h3>Clarifications / Queries to Raise</h3>
+        ${list(b.clarifications || b.missing || [], 12, "No clarification points suggested.")}
+
         ${dates && dates.length ? `
           <div class="divider"></div>
-          <h3>Dates found</h3>
-          <div>${esc(dates.slice(0, 12).join(" · "))}${dates.length > 12 ? ` <span class="muted">(+${dates.length - 12} more)</span>` : ""}</div>
+          <h3>Dates Found</h3>
+          <div>${esc(dates.slice(0, 14).join(" · "))}${dates.length > 14 ? ` <span class="muted">(+${dates.length - 14} more)</span>` : ""}</div>
         ` : ""}
-
-        <div class="divider"></div>
-
-        <h3>Key facts</h3>
-        <ul>
-          ${kf.deadline_or_key_date ? `<li><b>Deadline / key date:</b> ${esc(kf.deadline_or_key_date)}</li>` : ""}
-          ${kf.submission_route ? `<li><b>Submission route:</b> ${esc(kf.submission_route)}</li>` : ""}
-          ${kf.programme_duration ? `<li><b>Programme / duration:</b> ${esc(kf.programme_duration)}</li>` : ""}
-          ${kf.working_hours ? `<li><b>Working hours:</b> ${esc(kf.working_hours)}</li>` : ""}
-          ${kf.retention ? `<li><b>Retention:</b> ${esc(kf.retention)}</li>` : ""}
-          ${kf.liquidated_damages ? `<li><b>LD / LADs:</b> ${esc(kf.liquidated_damages)}</li>` : ""}
-          ${kf.insurance_levels ? `<li><b>Insurance:</b> ${esc(kf.insurance_levels)}</li>` : ""}
-          ${(kf.accreditations && kf.accreditations.length) ? `<li><b>Accreditations:</b> ${esc(kf.accreditations.slice(0, 6).join(", "))}</li>` : ""}
-          ${(!Object.keys(kf).length) ? `<li class="muted">No key facts detected.</li>` : ""}
-        </ul>
-
-        <div class="divider"></div>
-
-        <h3>Key constraints</h3>
-        ${list(b.constraints || [], 10)}
-
-        <div class="divider"></div>
-
-        <h3>Mandatory requirements</h3>
-        ${list(b.requirements_strict || [], 12)}
-
-        <h3>Other submission requests</h3>
-        ${list(b.requirements_loose || [], 12)}
-
-        <div class="divider"></div>
-
-        <h3>Not found (chase these)</h3>
-        ${list(b.missing || [], 12, "Nothing missing detected.")}
       `;
     } catch (err) {
       out.textContent = "Render failed: " + err;
+    }
+  };
+
+  window.downloadJson = function () {
+    if (!currentReport) return;
+    const blob = new Blob([JSON.stringify(currentReport, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "tender-summary.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  window.downloadPdf = async function () {
+    if (!currentReport) return;
+
+    try {
+      statusEl.textContent = "Building PDF…";
+      downloadPdfBtn.disabled = true;
+
+      const res = await fetch("/api/report/pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(currentReport)
+      });
+
+      if (!res.ok) {
+        let msg = `PDF request failed with status ${res.status}`;
+        try {
+          const j = await res.json();
+          msg = j.error || msg;
+        } catch (_) {}
+        throw new Error(msg);
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "tender-summary.pdf";
+      a.click();
+      URL.revokeObjectURL(url);
+      statusEl.textContent = "PDF ready";
+    } catch (err) {
+      statusEl.textContent = "PDF error";
+      alert(String(err));
+    } finally {
+      downloadPdfBtn.disabled = false;
+    }
+  };
+
+  const originalUploadZip = window.uploadZip;
+
+  window.uploadZip = async function () {
+    downloadBtn.disabled = true;
+    downloadPdfBtn.disabled = true;
+    currentReport = null;
+
+    if (typeof originalUploadZip === "function") {
+      return originalUploadZip();
+    }
+
+    if (!input.files.length) {
+      statusEl.textContent = "Select files first";
+      return;
+    }
+
+    try {
+      statusEl.textContent = "Uploading and analysing…";
+      out.textContent = "Analysing tender pack…";
+
+      const formData = new FormData();
+      for (const f of input.files) {
+        formData.append("files", f);
+      }
+
+      const res = await fetch("/api/analyse", {
+        method: "POST",
+        body: formData
+      });
+
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (_) {}
+
+      if (!res.ok) {
+        throw new Error((data && data.error) || `Request failed with status ${res.status}`);
+      }
+
+      window.renderTenderReport(data);
+      statusEl.textContent = "Done";
+    } catch (err) {
+      out.textContent = "Request failed: " + err;
+      statusEl.textContent = "Error";
     }
   };
 })();
