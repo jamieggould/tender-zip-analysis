@@ -266,6 +266,107 @@ text-transform:uppercase;
 letter-spacing:.04em;
 }
 
+.metaCard{
+margin-top:14px;
+border:1px solid rgba(15,23,42,0.10);
+border-radius:16px;
+background:white;
+padding:14px;
+}
+
+.metaCard h3{
+margin:0 0 10px;
+font-size:13px;
+letter-spacing:.06em;
+text-transform:uppercase;
+color:rgba(15,23,42,0.65);
+}
+
+.metaCard .metaMuted{
+font-size:12px;
+color:var(--muted);
+}
+
+.overviewList{
+display:grid;
+gap:8px;
+margin-top:10px;
+}
+
+.overviewRow{
+display:flex;
+justify-content:space-between;
+gap:10px;
+font-size:13px;
+padding:8px 0;
+border-bottom:1px solid rgba(15,23,42,0.06);
+}
+
+.overviewRow:last-child{
+border-bottom:0;
+}
+
+.overviewLabel{
+color:rgba(15,23,42,0.78);
+font-weight:600;
+}
+
+.overviewValue{
+display:flex;
+align-items:center;
+gap:8px;
+font-weight:700;
+color:rgba(15,23,42,0.88);
+}
+
+.tick{
+display:inline-flex;
+align-items:center;
+justify-content:center;
+width:18px;
+height:18px;
+border-radius:999px;
+font-size:11px;
+font-weight:800;
+border:1px solid rgba(15,23,42,0.12);
+background:white;
+}
+
+.tick.ok{
+border-color:rgba(22,163,74,0.30);
+color:rgba(22,163,74,0.95);
+}
+
+.tick.no{
+border-color:rgba(245,158,11,0.35);
+color:rgba(245,158,11,0.95);
+}
+
+.quickFacts{
+display:grid;
+gap:8px;
+margin-top:10px;
+}
+
+.quickFact{
+font-size:13px;
+padding:8px 0;
+border-bottom:1px solid rgba(15,23,42,0.06);
+}
+
+.quickFact:last-child{
+border-bottom:0;
+}
+
+.quickFact b{
+display:block;
+font-size:11px;
+letter-spacing:.04em;
+text-transform:uppercase;
+color:rgba(15,23,42,0.58);
+margin-bottom:2px;
+}
+
 .footer{
 margin-top:14px;
 display:flex;
@@ -378,6 +479,17 @@ Upload tender files (ZIP, PDFs, Excel, Word, images) and we'll scan what's insid
 
 </div>
 
+<div id="packOverviewCard" class="metaCard" style="display:none;">
+<h3>Pack Overview</h3>
+<div class="metaMuted" id="packOverviewMeta">No pack analysed yet.</div>
+<div id="packOverviewRows" class="overviewList"></div>
+</div>
+
+<div id="quickFactsCard" class="metaCard" style="display:none;">
+<h3>Quick Tender Facts</h3>
+<div id="quickFactsRows" class="quickFacts"></div>
+</div>
+
 </div>
 
 </section>
@@ -429,6 +541,11 @@ Upload files to generate a tender pack briefing.
   const statusEl = document.getElementById("status");
   const downloadBtn = document.getElementById("downloadBtn");
   const downloadPdfBtn = document.getElementById("downloadPdfBtn");
+  const packOverviewCard = document.getElementById("packOverviewCard");
+  const packOverviewMeta = document.getElementById("packOverviewMeta");
+  const packOverviewRows = document.getElementById("packOverviewRows");
+  const quickFactsCard = document.getElementById("quickFactsCard");
+  const quickFactsRows = document.getElementById("quickFactsRows");
 
   let currentReport = null;
 
@@ -485,6 +602,62 @@ Upload files to generate a tender pack briefing.
     return `<div class="factItem"><b>${esc(label)}</b><div>${esc(value)}</div></div>`;
   };
 
+  const renderOverviewRow = (label, found, count) => {
+    const tickClass = found ? "ok" : "no";
+    const tickText = found ? "✓" : "✕";
+    return `
+      <div class="overviewRow">
+        <div class="overviewLabel">${esc(label)}</div>
+        <div class="overviewValue">
+          <span class="tick ${tickClass}">${tickText}</span>
+          <span>${count ?? 0}</span>
+        </div>
+      </div>
+    `;
+  };
+
+  const renderQuickFact = (label, value) => {
+    if (!value) return "";
+    return `
+      <div class="quickFact">
+        <b>${esc(label)}</b>
+        <div>${esc(value)}</div>
+      </div>
+    `;
+  };
+
+  function updateLeftPanelSummary(data) {
+    const s = data.summary || {};
+    const b = data.briefing || {};
+    const kf = b.key_facts || {};
+    const byCat = s.by_category || {};
+
+    packOverviewCard.style.display = "block";
+    quickFactsCard.style.display = "block";
+
+    packOverviewMeta.textContent = `${s.total_files_scanned || 0} files scanned`;
+
+    packOverviewRows.innerHTML = [
+      renderOverviewRow("Drawings", !!s.drawings_found, byCat.drawings || 0),
+      renderOverviewRow("Specifications", !!s.specs_found, byCat.specs || 0),
+      renderOverviewRow("Forms", !!s.forms_found, byCat.forms || 0),
+      renderOverviewRow("Registers", !!s.register_found, byCat.registers || 0),
+      renderOverviewRow("BOQ / Pricing", !!s.boq_found, byCat.boq || 0),
+      renderOverviewRow("Addenda", !!s.addenda_found, byCat.addenda || 0)
+    ].join("");
+
+    const quickFactsHtml = [
+      renderQuickFact("Deadline / key date", kf.deadline_or_key_date),
+      renderQuickFact("Programme / duration", kf.programme_duration),
+      renderQuickFact("Working hours", kf.working_hours),
+      renderQuickFact("Retention", kf.retention),
+      renderQuickFact("LD / LADs", kf.liquidated_damages),
+      renderQuickFact("Submission route", kf.submission_route)
+    ].filter(Boolean).join("");
+
+    quickFactsRows.innerHTML = quickFactsHtml || `<div class="metaMuted">No key tender facts detected yet.</div>`;
+  }
+
   window.renderTenderReport = function (data) {
     try {
       if (!data) {
@@ -495,6 +668,7 @@ Upload files to generate a tender pack briefing.
       currentReport = data;
       downloadBtn.disabled = false;
       downloadPdfBtn.disabled = false;
+      updateLeftPanelSummary(data);
 
       const s = data.summary || {};
       const b = data.briefing || {};
@@ -631,6 +805,10 @@ Upload files to generate a tender pack briefing.
     downloadBtn.disabled = true;
     downloadPdfBtn.disabled = true;
     currentReport = null;
+    packOverviewCard.style.display = "none";
+    quickFactsCard.style.display = "none";
+    packOverviewRows.innerHTML = "";
+    quickFactsRows.innerHTML = "";
 
     if (typeof originalUploadZip === "function") {
       return originalUploadZip();
