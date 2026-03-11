@@ -8,3 +8,4 @@ pypdf==4.3.1
 openpyxl==3.1.5
 python-docx==1.1.2
 openai>=1.40.0
+reportlab>=4.0.0
