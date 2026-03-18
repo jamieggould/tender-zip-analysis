@@ -57,10 +57,20 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
 OPENAI_TIMEOUT_SEC = float(os.getenv("OPENAI_TIMEOUT_SEC", "18"))
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-# Performance / scan tuning
 MAX_FILE_BYTES = 300 * 1024 * 1024
 MAX_FILES_TO_PROCESS = 15000
 EXTRACT_WORKERS = 4
+MAX_ZIP_MEMBERS = 20000
+MAX_ZIP_RECURSION = 3
+
+PDF_MAX_PAGES = 12
+PDF_OCR_MAX_PAGES = 5
+DOCX_MAX_PARAS = 260
+DOCX_MAX_TABLES = 24
+DOCX_MAX_TABLE_ROWS = 120
+XLSX_MAX_SHEETS = 16
+XLSX_MAX_ROWS = 40
+CSV_MAX_ROWS = 40
 
 BASE_DEEP_SCAN_LIMITS = {
     "boq": 6,
@@ -76,18 +86,6 @@ BASE_DEEP_SCAN_LIMITS = {
     "photos": 4,
     "other": 0,
 }
-
-MAX_ZIP_MEMBERS = 20000
-MAX_ZIP_RECURSION = 3
-
-PDF_MAX_PAGES = 12
-PDF_OCR_MAX_PAGES = 5
-DOCX_MAX_PARAS = 260
-DOCX_MAX_TABLES = 24
-DOCX_MAX_TABLE_ROWS = 120
-XLSX_MAX_SHEETS = 16
-XLSX_MAX_ROWS = 40
-CSV_MAX_ROWS = 40
 
 KEYWORDS = {
     "boq": ["boq", "bill", "bq", "quantities", "pricing schedule", "schedule of rates", "sor", "price", "pricing"],
@@ -140,45 +138,6 @@ DATE_PATTERNS = [
     r"\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b",
 ]
 
-DEADLINE_PATTERNS = [
-    r"\b(?:tender|return|submission|submit)\s+(?:date|deadline|by)\b[:\s\-]*([^\n]{0,120})",
-    r"\b(?:closing date|deadline|tender return)\b[:\s\-]*([^\n]{0,120})",
-]
-
-SUBMISSION_PATTERNS = [
-    r"\b(?:submit|submission|return)\b.{0,120}\b(?:email|e-mail|portal|upload|address)\b.{0,120}",
-    r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
-]
-
-PROGRAMME_PATTERNS = [
-    r"\b(?:programme|program|duration|contract period)\b[:\s\-]*([^\n]{0,120})",
-    r"\b\d{1,3}\s*(?:weeks?|months?)\b.{0,60}\b(?:programme|duration|contract period)\b",
-]
-
-WORKING_HOURS_PATTERNS = [
-    r"\b(?:working hours|site hours|hours of work)\b[:\s\-]*([^\n]{0,160})",
-    r"\b(?:mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday)\b.{0,80}\b\d{1,2}[:.]\d{2}\b.{0,40}\b\d{1,2}[:.]\d{2}\b",
-]
-
-LD_PATTERNS = [
-    r"\b(?:liquidated damages|LDs?|LADs?)\b[:\s\-]*([^\n]{0,120})",
-    r"\b(?:liquidated damages|LDs?|LADs?)\b.{0,80}\£\s?\d[\d,]*\.?\d*",
-]
-
-RETENTION_PATTERNS = [
-    r"\bretention\b[:\s\-]*([^\n]{0,120})",
-    r"\b\d{1,2}(?:\.\d+)?\s*%\b.{0,40}\bretention\b",
-]
-
-INSURANCE_PATTERNS = [
-    r"\b(?:public liability|employers liability|EL|PL|insurance)\b[:\s\-]*([^\n]{0,140})",
-    r"\b(?:public liability|employers liability|insurance)\b.{0,120}\£\s?\d[\d,]*\.?\d*",
-]
-
-ACCREDITATION_PATTERNS = [
-    r"\b(?:CHAS|SMAS|SafeContractor|Constructionline|ISO\s?9001|ISO\s?14001|ISO\s?45001)\b.{0,140}",
-]
-
 REQ_STRICT_RE = re.compile(r"\b(must|shall|required|mandatory|as a minimum|minimum of|no later than)\b", re.I)
 REQ_LOOSE_RE = re.compile(r"\b(should|please|requested|provide|submit|include|confirm)\b", re.I)
 COMMERCIAL_SIGNAL_RE = re.compile(r"(£\s?\d|%\b|\bweeks?\b|\bmonths?\b|\b\d{1,2}[:.]\d{2}\b)", re.I)
@@ -196,7 +155,6 @@ BAD_FRAGMENT_RE = re.compile(
     r"(\b\d+(\.\d+){1,}\b|"
     r"\b(employer'?s agent|project manager|quantity surveyor)\b|"
     r"\bname:\b|"
-    r"@[A-Z0-9._%+-]+|"
     r"\bappendix\b|\bschedule\b\s+\d|\bclause\b|\bsection\b\s+\d)",
     re.I,
 )
@@ -291,7 +249,7 @@ def _looks_bad_fragment(s: str) -> bool:
         return True
     if BAD_FRAGMENT_RE.search(s2) and len(s2) < 240:
         return True
-    if s2.endswith(("within p", "within h", "where required)", "if required)", "n/a £1.")):
+    if s2.endswith(("within p", "within h", "n/a £1.")):
         return True
     return False
 
@@ -449,112 +407,128 @@ def _clean_fact_value(text: str | None, max_len: int = 220) -> str | None:
     return s[:max_len]
 
 
-def _clean_submission_value(text: str | None) -> str | None:
+def _first_clean_match(text: str, patterns: list[str], max_len: int = 180) -> str | None:
     if not text:
         return None
-    s = _normalize_line(text)
-
-    email = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", s, re.I)
-    if email:
-        return f"Email: {email.group(0)}"
-
-    if re.search(r"\bportal\b", s, re.I):
-        return "Portal submission indicated"
-    if re.search(r"\bupload\b", s, re.I):
-        return "Upload submission indicated"
-    if re.search(r"\baddress\b", s, re.I):
-        return "Address-based submission indicated"
-
-    return _clean_fact_value(s, 180)
-
-
-def _shorten_constraint(bucket: str, text: str) -> str | None:
-    s = _clean_fact_value(text, 260)
-    if not s:
-        return None
-
-    bucket_prefix = {
-        "Asbestos / hazardous materials": "Asbestos or hazardous materials appear to be referenced.",
-        "Temporary works / propping": "Temporary works or propping requirements appear to be referenced.",
-        "Party wall / adjacent structures": "Adjacent structure or third-party interface risk appears to be referenced.",
-        "Traffic management / access": "Access or logistics constraints appear to be referenced.",
-        "Noise / dust / vibration": "Noise, dust, or vibration controls appear to be referenced.",
-        "Services / isolations": "Live services or isolation requirements appear to be referenced.",
-        "Waste / crushing / segregation": "Waste handling or segregation requirements appear to be referenced.",
-        "Permits / licences": "Permits, licences, or consents appear to be referenced.",
-        "Working hours / constraints": "Working hour constraints appear to be referenced.",
-        "Liquidated damages / penalties": "Delay damages or penalties appear to be referenced.",
-    }
-
-    generic = bucket_prefix.get(bucket, "")
-    if len(s.split()) < 9 or BAD_FRAGMENT_RE.search(s):
-        return generic or None
-    return s[:260]
-
-
-def _best_candidate_from_patterns(
-    text: str,
-    patterns: list[str],
-    *,
-    validator=None,
-    cleaner=None,
-    max_items: int = 6,
-) -> list[str]:
-    found: list[tuple[int, str]] = []
-    seen: set[str] = set()
-
-    if not text:
-        return []
 
     for pat in patterns:
         for m in re.finditer(pat, text, flags=re.IGNORECASE):
-            ctx = _sentences_around(text, m.start(), max_sentences=2)
-            if not ctx:
+            val = m.group(1) if m.groups() else m.group(0)
+            val = _normalize_line(val)
+            if not val:
                 continue
-            if cleaner:
-                ctx = cleaner(ctx)
-            else:
-                ctx = _clean_fact_value(ctx, 320)
-            if not ctx:
+            if _looks_irrelevant(val) or _looks_like_schedule_row(val) or _is_gibberish_line(val):
                 continue
-            if validator and not validator(ctx):
-                continue
-            key = ctx.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            found.append((_sentence_score(ctx), ctx))
+            return val[:max_len]
+    return None
 
-    found.sort(key=lambda x: x[0], reverse=True)
-    return [x[1] for x in found[:max_items]]
 
-def _find_bucket_evidence(merged: str, needle: str, bucket: str, max_items: int = 1) -> list[str]:
-    merged_lc = merged.lower()
-    out: list[str] = []
-    start = 0
+def _extract_submission_route(text: str) -> str | None:
+    if not text:
+        return None
 
-    while len(out) < max_items:
-        idx = merged_lc.find(needle, start)
-        if idx == -1:
-            break
+    email = re.search(r"\b([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b", text, flags=re.I)
+    if email:
+        return f"Email: {email.group(1)}"
 
-        s = _sentences_around(merged, idx, max_sentences=2)
-        s = _normalize_line(s)[:440]
+    if re.search(r"\bportal\b", text, flags=re.I):
+        return "Portal submission"
+    if re.search(r"\bupload\b", text, flags=re.I):
+        return "Upload submission"
 
-        if s and not _looks_irrelevant(s) and not _looks_like_schedule_row(s) and not _is_gibberish_line(s):
-            sl = s.lower()
+    return None
 
-            if bucket == "Services / isolations":
-                if not any(x in sl for x in ["isolation", "isolations", "live", "disconnect", "disconnection", "divert", "diversion"]):
-                    start = idx + len(needle)
-                    continue
 
-            if _sentence_score(s) > 0 and s not in out:
-                out.append(s)
+def _extract_retention_value(text: str) -> str | None:
+    if not text:
+        return None
 
-        start = idx + len(needle)
+    patterns = [
+        r"\bretention\b\s*[:\-]?\s*(\d{1,2}(?:\.\d+)?\s*%)",
+        r"(\d{1,2}(?:\.\d+)?\s*%)\s*\bretention\b",
+        r"\bretention\b.{0,40}\b(of\s+\d{1,2}(?:\.\d+)?\s*%)",
+    ]
+    return _first_clean_match(text, patterns, max_len=80)
 
-    return out
+
+def _extract_ld_value(text: str) -> str | None:
+    if not text:
+        return None
+
+    patterns = [
+        r"\b(?:liquidated damages|LDs?|LADs?)\b.{0,40}(£\s?\d[\d,]*\.?\d*(?:\s*(?:per week|per day|per month))?)",
+        r"(£\s?\d[\d,]*\.?\d*\s*(?:per week|per day|per month))",
+    ]
+    return _first_clean_match(text, patterns, max_len=120)
+
+
+def _extract_programme_value(text: str) -> str | None:
+    if not text:
+        return None
+
+    patterns = [
+        r"\b(?:programme|program|duration|contract period)\b\s*[:\-]?\s*(\d{1,3}\s*(?:weeks?|months?))",
+        r"(\d{1,3}\s*(?:weeks?|months?))\s*\b(?:programme|duration|contract period)\b",
+    ]
+    return _first_clean_match(text, patterns, max_len=80)
+
+
+def _extract_working_hours_value(text: str) -> str | None:
+    if not text:
+        return None
+
+    patterns = [
+        r"\b(?:working hours|site hours|hours of work)\b\s*[:\-]?\s*([^\n\.]{6,120})",
+        r"\b((?:mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday)[^\n\.]{0,80}\d{1,2}[:.]\d{2}[^\n\.]{0,20}\d{1,2}[:.]\d{2})\b",
+    ]
+
+    raw = _first_clean_match(text, patterns, max_len=140)
+    if not raw:
+        return None
+
+    bad_phrases = [
+        "scaffold",
+        "secured outside normal working hours",
+        "trespass",
+        "ladder",
+        "safety",
+    ]
+    if any(x in raw.lower() for x in bad_phrases):
+        return None
+
+    return raw
+
+
+def _extract_insurance_value(text: str) -> str | None:
+    if not text:
+        return None
+
+    patterns = [
+        r"\b(?:public liability|employers liability|EL|PL)\b.{0,40}(£\s?\d[\d,]*\.?\d*)",
+        r"\binsurance\b.{0,40}(£\s?\d[\d,]*\.?\d*)",
+    ]
+    return _first_clean_match(text, patterns, max_len=120)
+
+
+def _extract_deadline_value(text: str, fallback_dates: list[str]) -> str | None:
+    if text:
+        patterns = [
+            r"\b(?:tender|return|submission|submit)\s+(?:date|deadline|by)\b\s*[:\-]?\s*([^\n\.]{4,80})",
+            r"\b(?:closing date|deadline|tender return)\b\s*[:\-]?\s*([^\n\.]{4,80})",
+        ]
+        raw = _first_clean_match(text, patterns, max_len=100)
+        if raw:
+            date_inside = re.search(
+                r"\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s+\d{2,4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b",
+                raw,
+                flags=re.I,
+            )
+            if date_inside:
+                return date_inside.group(1)
+
+    clean_dates = [d for d in fallback_dates if _valid_date_candidate(d)]
+    return clean_dates[0] if clean_dates else None
+
 
 def _dedup_keep_best(items: list[str], limit: int, width: int = 320) -> list[str]:
     scored: list[tuple[int, str]] = []
@@ -658,8 +632,6 @@ def _file_priority_score(display: str, category: str) -> int:
         score += 15
     elif category == "drawings":
         score += 8
-    else:
-        score += 0
 
     parts = s.split("/")
     if len(parts) > 1:
@@ -760,6 +732,49 @@ def _extract_requirements(text: str, max_lines: int = 20) -> dict[str, list[str]
     return {"strict": dedup("strict", max_lines), "loose": dedup("loose", max_lines)}
 
 
+def _find_bucket_evidence(merged: str, needle: str, bucket: str, max_items: int = 1) -> list[str]:
+    merged_lc = merged.lower()
+    out: list[str] = []
+    start = 0
+
+    while len(out) < max_items:
+        idx = merged_lc.find(needle, start)
+        if idx == -1:
+            break
+
+        s = _sentences_around(merged, idx, max_sentences=2)
+        s = _normalize_line(s)[:440]
+
+        if s and not _looks_irrelevant(s) and not _looks_like_schedule_row(s) and not _is_gibberish_line(s):
+            sl = s.lower()
+
+            if bucket == "Services / isolations":
+                if not any(x in sl for x in ["isolation", "isolations", "live", "disconnect", "disconnection", "divert", "diversion"]):
+                    start = idx + len(needle)
+                    continue
+
+            if _sentence_score(s) > 0 and s not in out:
+                out.append(s)
+
+        start = idx + len(needle)
+
+    return out
+
+
+def guess_revision(filename: str) -> str | None:
+    s = (filename or "").upper()
+    m = re.search(r"(?:REV[\s_\-]*)?([PC]\d{2,3})\b", s)
+    return m.group(1) if m else None
+
+
+def guess_drawing_number(filename: str) -> str | None:
+    s = Path(filename).stem.upper()
+    m = re.search(r"\b([A-Z]{1,4}[-_ ]?\d{2,6})\b", s)
+    if m:
+        return m.group(1).replace(" ", "-").replace("_", "-")
+    return None
+
+
 def _extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, Any]:
     info: dict[str, Any] = {
         "pages": None,
@@ -783,7 +798,6 @@ def _extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, A
 
         text = _clean_text("\n".join(text_parts))
 
-        # OCR fallback for scanned PDFs
         if len(text) < 500:
             ocr_text = _ocr_pdf_file(path, max_pages=min(PDF_OCR_MAX_PAGES, info["pages"] or PDF_OCR_MAX_PAGES))
             if len(ocr_text) > len(text):
@@ -967,41 +981,28 @@ def _extract_by_type(path: Path, category: str) -> dict[str, Any]:
     return {}
 
 
-def _best_candidate_from_patterns(
-    text: str,
-    patterns: list[str],
-    *,
-    validator=None,
-    cleaner=None,
-    max_items: int = 6,
-) -> list[str]:
-    found: list[tuple[int, str]] = []
-    seen: set[str] = set()
+def _shorten_constraint(bucket: str, text: str) -> str | None:
+    s = _clean_fact_value(text, 260)
+    if not s:
+        return None
 
-    if not text:
-        return []
+    bucket_prefix = {
+        "Asbestos / hazardous materials": "Asbestos or hazardous materials appear to be referenced.",
+        "Temporary works / propping": "Temporary works or propping requirements appear to be referenced.",
+        "Party wall / adjacent structures": "Adjacent structure or third-party interface risk appears to be referenced.",
+        "Traffic management / access": "Access or logistics constraints appear to be referenced.",
+        "Noise / dust / vibration": "Noise, dust, or vibration controls appear to be referenced.",
+        "Services / isolations": "Live services or isolation requirements appear to be referenced.",
+        "Waste / crushing / segregation": "Waste handling or segregation requirements appear to be referenced.",
+        "Permits / licences": "Permits, licences, or consents appear to be referenced.",
+        "Working hours / constraints": "Working hour constraints appear to be referenced.",
+        "Liquidated damages / penalties": "Delay damages or penalties appear to be referenced.",
+    }
 
-    for pat in patterns:
-        for m in re.finditer(pat, text, flags=re.IGNORECASE):
-            ctx = _sentences_around(text, m.start(), max_sentences=2)
-            if not ctx:
-                continue
-            if cleaner:
-                ctx = cleaner(ctx)
-            else:
-                ctx = _clean_fact_value(ctx, 320)
-            if not ctx:
-                continue
-            if validator and not validator(ctx):
-                continue
-            key = ctx.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            found.append((_sentence_score(ctx), ctx))
-
-    found.sort(key=lambda x: x[0], reverse=True)
-    return [x[1] for x in found[:max_items]]
+    generic = bucket_prefix.get(bucket, "")
+    if len(s.split()) < 9 or BAD_FRAGMENT_RE.search(s):
+        return generic or None
+    return s[:260]
 
 
 def _build_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
@@ -1025,56 +1026,6 @@ def _build_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str, Any]
     merged = "\n\n".join(text_blobs)[:140000]
     merged_lc = merged.lower()
 
-    tender_return_candidates = _best_candidate_from_patterns(
-        merged,
-        DEADLINE_PATTERNS,
-        cleaner=lambda s: _clean_fact_value(s, 180),
-        validator=_valid_date_candidate,
-        max_items=4,
-    )
-    submission_candidates = _best_candidate_from_patterns(
-        merged,
-        SUBMISSION_PATTERNS,
-        cleaner=_clean_submission_value,
-        max_items=4,
-    )
-    programme_candidates = _best_candidate_from_patterns(
-        merged,
-        PROGRAMME_PATTERNS,
-        cleaner=lambda s: _clean_fact_value(s, 180),
-        max_items=4,
-    )
-    working_hours_candidates = _best_candidate_from_patterns(
-        merged,
-        WORKING_HOURS_PATTERNS,
-        cleaner=lambda s: _clean_fact_value(s, 220),
-        max_items=4,
-    )
-    retention_candidates = _best_candidate_from_patterns(
-        merged,
-        RETENTION_PATTERNS,
-        cleaner=lambda s: _clean_fact_value(s, 160),
-        max_items=4,
-    )
-    ld_candidates = _best_candidate_from_patterns(
-        merged,
-        LD_PATTERNS,
-        cleaner=lambda s: _clean_fact_value(s, 180),
-        max_items=4,
-    )
-    insurance_candidates = _best_candidate_from_patterns(
-        merged,
-        INSURANCE_PATTERNS,
-        cleaner=lambda s: _clean_fact_value(s, 220),
-        max_items=4,
-    )
-    accreditations_raw = _best_candidate_from_patterns(
-        merged,
-        ACCREDITATION_PATTERNS,
-        cleaner=lambda s: _clean_fact_value(s, 180),
-        max_items=6,
-    )
-
     date_candidates: set[str] = set()
     for _, items in sections.items():
         for it in items:
@@ -1082,6 +1033,24 @@ def _build_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str, Any]
             for d in ex.get("date_candidates", []) or []:
                 if _valid_date_candidate(str(d)):
                     date_candidates.add(str(d))
+
+    all_dates = sorted(date_candidates)[:20]
+
+    headline_deadline = _extract_deadline_value(merged, all_dates)
+    headline_submission = _extract_submission_route(merged)
+    headline_prog = _extract_programme_value(merged)
+    headline_hours = _extract_working_hours_value(merged)
+    headline_ret = _extract_retention_value(merged)
+    headline_ld = _extract_ld_value(merged)
+    headline_ins = _extract_insurance_value(merged)
+
+    tender_return_candidates = [headline_deadline] if headline_deadline else []
+    submission_candidates = [headline_submission] if headline_submission else []
+    programme_candidates = [headline_prog] if headline_prog else []
+    working_hours_candidates = [headline_hours] if headline_hours else []
+    retention_candidates = [headline_ret] if headline_ret else []
+    ld_candidates = [headline_ld] if headline_ld else []
+    insurance_candidates = [headline_ins] if headline_ins else []
 
     strict_clean = _dedup_keep_best(strict_reqs, 12, 340)
     loose_clean = _dedup_keep_best(loose_reqs, 8, 340)
@@ -1101,25 +1070,23 @@ def _build_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str, Any]
 
         if best_ev:
             short = _shorten_constraint(bucket, best_ev)
-            if short:
+            if short and short not in constraints:
                 constraints.append(short)
 
         if len(constraints) >= 8:
             break
 
-    headline_deadline = tender_return_candidates[0] if tender_return_candidates else (sorted(date_candidates)[0] if date_candidates else None)
-    headline_submission = submission_candidates[0] if submission_candidates else None
-    headline_prog = programme_candidates[0] if programme_candidates else None
-    headline_hours = working_hours_candidates[0] if working_hours_candidates else None
-    headline_ret = retention_candidates[0] if retention_candidates else None
-    headline_ld = ld_candidates[0] if ld_candidates else None
-    headline_ins = insurance_candidates[0] if insurance_candidates else None
+    acc_short: list[str] = []
+    for token in ["CHAS", "SMAS", "SafeContractor", "Constructionline", "ISO 9001", "ISO 14001", "ISO 45001"]:
+        if re.search(rf"\b{re.escape(token)}\b", merged, flags=re.I):
+            acc_short.append(token)
+    acc_short = _trim_list(acc_short, 6, 80)
 
     missing: list[str] = []
-    if not headline_deadline and not date_candidates:
+    if not headline_deadline and not all_dates:
         missing.append("Tender return date / deadline not found")
     if not headline_submission:
-        missing.append("Submission method (email/portal/address) not found")
+        missing.append("Submission method (email/portal/upload) not found")
     if not headline_prog:
         missing.append("Programme / duration not found")
     if not headline_hours:
@@ -1130,7 +1097,7 @@ def _build_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str, Any]
         missing.append("Liquidated damages / LADs not found")
     if not headline_ins:
         missing.append("Insurance levels not found")
-    if not accreditations_raw:
+    if not acc_short:
         missing.append("Accreditations (CHAS/SMAS/etc) not found")
 
     executive_lines: list[str] = []
@@ -1160,7 +1127,7 @@ def _build_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str, Any]
     if headline_prog:
         overview_parts.append(f"Programme information indicates {headline_prog.lower()}.")
     if headline_hours:
-        overview_parts.append(f"Working hour or access constraints indicate {headline_hours.lower()}.")
+        overview_parts.append(f"Working hours or access constraints indicate {headline_hours.lower()}.")
     if not overview_parts:
         overview_parts.append("The pack has been scanned and the strongest commercial, submission, and delivery points are summarised below.")
 
@@ -1177,13 +1144,11 @@ def _build_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str, Any]
     pricing_watchouts = strict_clean[:6] if strict_clean else constraints[:6]
 
     clarifications = missing[:]
-    if not headline_submission and "Submission method (email/portal/address) not found" not in clarifications:
-        clarifications.append("Confirm submission route and whether the tender must be emailed, uploaded, or submitted through a portal.")
+    if not headline_submission and "Submission method (email/portal/upload) not found" not in clarifications:
+        clarifications.append("Confirm whether the tender must be emailed, uploaded, or submitted through a portal.")
     if not headline_prog and "Programme / duration not found" not in clarifications:
         clarifications.append("Confirm programme duration, milestones, and any phased handover requirements.")
     clarifications = clarifications[:8]
-
-    acc_short = _trim_list(accreditations_raw, 6, 180)
 
     return {
         "title": "Tender Pack Summary",
@@ -1205,7 +1170,7 @@ def _build_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str, Any]
             "insurance_levels": headline_ins,
             "accreditations": acc_short,
         },
-        "dates_found": sorted(date_candidates)[:20],
+        "dates_found": all_dates,
         "constraints": constraints,
         "requirements_strict": strict_clean,
         "requirements_loose": loose_clean,
@@ -1634,7 +1599,6 @@ async def analyse(
                 priority = _file_priority_score(display, category)
                 classified_rows.append((priority, p, display, ext, category))
 
-            # Sort best files first before deep extraction
             classified_rows.sort(key=lambda x: x[0], reverse=True)
 
             extraction_jobs: list[tuple[dict[str, Any], Path, str]] = []
