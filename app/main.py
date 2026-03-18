@@ -61,6 +61,22 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 MAX_FILE_BYTES = 300 * 1024 * 1024
 MAX_FILES_TO_PROCESS = 15000
 EXTRACT_WORKERS = 4
+
+BASE_DEEP_SCAN_LIMITS = {
+    "boq": 6,
+    "registers": 4,
+    "drawings": 30,
+    "forms": 8,
+    "prelims": 8,
+    "specs": 10,
+    "addenda": 8,
+    "documents": 8,
+    "pdfs": 10,
+    "spreadsheets": 4,
+    "photos": 4,
+    "other": 0,
+}
+
 MAX_ZIP_MEMBERS = 20000
 MAX_ZIP_RECURSION = 3
 
