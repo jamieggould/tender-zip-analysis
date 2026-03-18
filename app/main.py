@@ -1353,6 +1353,7 @@ async def analyse(
                     "ai_enabled": bool(openai_client),
                     "ai_model": OPENAI_MODEL if openai_client else None,
                     "ai_used": bool(briefing.get("ai_used")),
+                     "ai_error": briefing.get("ai_error"),
                 },
                 "briefing": briefing,
                 "sections": dict(sections),
