@@ -528,6 +528,33 @@ def _best_candidate_from_patterns(
     found.sort(key=lambda x: x[0], reverse=True)
     return [x[1] for x in found[:max_items]]
 
+def _find_bucket_evidence(merged: str, needle: str, bucket: str, max_items: int = 1) -> list[str]:
+    merged_lc = merged.lower()
+    out: list[str] = []
+    start = 0
+
+    while len(out) < max_items:
+        idx = merged_lc.find(needle, start)
+        if idx == -1:
+            break
+
+        s = _sentences_around(merged, idx, max_sentences=2)
+        s = _normalize_line(s)[:440]
+
+        if s and not _looks_irrelevant(s) and not _looks_like_schedule_row(s) and not _is_gibberish_line(s):
+            sl = s.lower()
+
+            if bucket == "Services / isolations":
+                if not any(x in sl for x in ["isolation", "isolations", "live", "disconnect", "disconnection", "divert", "diversion"]):
+                    start = idx + len(needle)
+                    continue
+
+            if _sentence_score(s) > 0 and s not in out:
+                out.append(s)
+
+        start = idx + len(needle)
+
+    return out
 
 def _dedup_keep_best(items: list[str], limit: int, width: int = 320) -> list[str]:
     scored: list[tuple[int, str]] = []
