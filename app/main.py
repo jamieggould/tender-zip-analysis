@@ -30,6 +30,22 @@ from reportlab.lib.units import mm
 from reportlab.platypus import ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer
 from starlette.requests import Request
 
+# Optional OCR extras
+try:
+    from pdf2image import convert_from_path  # type: ignore
+except Exception:
+    convert_from_path = None
+
+try:
+    import pytesseract  # type: ignore
+except Exception:
+    pytesseract = None
+
+try:
+    from PIL import Image  # type: ignore
+except Exception:
+    Image = None
+
 
 app = FastAPI(title="Tender Pack Summary")
 
@@ -38,33 +54,24 @@ templates = Jinja2Templates(directory="templates")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
-OPENAI_TIMEOUT_SEC = float(os.getenv("OPENAI_TIMEOUT_SEC", "14"))
+OPENAI_TIMEOUT_SEC = float(os.getenv("OPENAI_TIMEOUT_SEC", "18"))
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-# performance tuning
-PDF_MAX_PAGES = 8
-DOCX_MAX_PARAS = 180
-DOCX_MAX_TABLES = 16
-DOCX_MAX_TABLE_ROWS = 80
-MAX_FILES_TO_PROCESS = 12000
+# Performance / scan tuning
 MAX_FILE_BYTES = 300 * 1024 * 1024
+MAX_FILES_TO_PROCESS = 15000
 EXTRACT_WORKERS = 4
+MAX_ZIP_MEMBERS = 20000
+MAX_ZIP_RECURSION = 3
 
-# deep-scan only a useful subset so big packs don't 504
-BASE_DEEP_SCAN_LIMITS = {
-    "boq": 4,
-    "registers": 4,
-    "drawings": 40,
-    "forms": 6,
-    "prelims": 6,
-    "specs": 8,
-    "addenda": 6,
-    "documents": 6,
-    "pdfs": 8,
-    "spreadsheets": 4,
-    "photos": 0,
-    "other": 0,
-}
+PDF_MAX_PAGES = 12
+PDF_OCR_MAX_PAGES = 5
+DOCX_MAX_PARAS = 260
+DOCX_MAX_TABLES = 24
+DOCX_MAX_TABLE_ROWS = 120
+XLSX_MAX_SHEETS = 16
+XLSX_MAX_ROWS = 40
+CSV_MAX_ROWS = 40
 
 KEYWORDS = {
     "boq": ["boq", "bill", "bq", "quantities", "pricing schedule", "schedule of rates", "sor", "price", "pricing"],
@@ -74,9 +81,19 @@ KEYWORDS = {
     "specs": ["spec", "specification", "employer", "requirements", "works information", "er", "scope"],
     "forms": ["form", "tender form", "declaration", "questionnaire", "pqq", "sq", "itt", "appendix", "submission"],
     "programme": ["programme", "program", "schedule", "gantt"],
+    "itt": ["itt", "invitation to tender", "tender return", "instructions to tenderers"],
 }
 
 DRAWING_HINTS = ["drg", "dwg", "drawing", "ga", "plan", "elev", "section", "sketch", "sk"]
+
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+DRAWING_EXTS = {".dwg", ".dxf"}
+SPREADSHEET_EXTS = {".xlsx", ".xls", ".csv"}
+DOC_EXTS = {".docx", ".doc"}
+PDF_EXTS = {".pdf"}
+
+IGNORED_FILENAMES = {".ds_store", "thumbs.db", "desktop.ini"}
+IGNORED_SUFFIXES = {".tmp", ".bak", ".lock"}
 
 ESTIMATOR_KEYWORDS = [
     "asbestos", "acm", "soft strip", "strip out", "demolition", "temporary works", "propping",
@@ -86,7 +103,7 @@ ESTIMATOR_KEYWORDS = [
     "water", "electric", "gas", "services", "live", "isolation", "disconnect", "diversion",
     "section 61", "access", "logistics", "hoarding", "scaffold", "crane", "lift",
     "phasing", "sequence", "sequencing", "retention", "bond", "warranty", "insurance",
-    "liquidated damages", "ld", "lad", "penalty",
+    "liquidated damages", "ld", "lad", "penalty", "tender", "submission", "deadline",
 ]
 
 RISK_BUCKETS: dict[str, list[str]] = {
@@ -107,36 +124,43 @@ DATE_PATTERNS = [
     r"\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b",
 ]
 
-TENDER_RETURN_PATTERNS = [
-    r"(tender|return|submit|submission)\s+(date|deadline|by)\s*[:\-]?\s*([^\n]{0,160})",
-    r"\b(closing date|deadline)\b\s*[:\-]?\s*([^\n]{0,160})",
+DEADLINE_PATTERNS = [
+    r"\b(?:tender|return|submission|submit)\s+(?:date|deadline|by)\b[:\s\-]*([^\n]{0,120})",
+    r"\b(?:closing date|deadline|tender return)\b[:\s\-]*([^\n]{0,120})",
 ]
+
 SUBMISSION_PATTERNS = [
-    r"\b(submit|submission|return)\b.{0,140}\b(email|e-mail|portal|upload|address)\b.{0,140}",
-    r"\b(email)\b\s*[:\-]?\s*([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})",
+    r"\b(?:submit|submission|return)\b.{0,120}\b(?:email|e-mail|portal|upload|address)\b.{0,120}",
+    r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
 ]
-LD_PATTERNS = [
-    r"(liquidated damages|LDs?|LADs?)\s*[:\-]?\s*(£\s?\d[\d,]*\.?\d*)",
-    r"(liquidated damages|LDs?|LADs?).{0,100}(£\s?\d[\d,]*\.?\d*)",
-]
-RETENTION_PATTERNS = [
-    r"(retention)\s*[:\-]?\s*(\d{1,2}(\.\d+)?\s*%)",
-    r"(\d{1,2}(\.\d+)?\s*%)\s*(retention)",
-]
+
 PROGRAMME_PATTERNS = [
-    r"(programme|program|duration|contract period)\s*[:\-]?\s*(\d{1,3})\s*(weeks?|months?)",
-    r"(\d{1,3})\s*(weeks?|months?)\s*(programme|duration|contract period)",
+    r"\b(?:programme|program|duration|contract period)\b[:\s\-]*([^\n]{0,120})",
+    r"\b\d{1,3}\s*(?:weeks?|months?)\b.{0,60}\b(?:programme|duration|contract period)\b",
 ]
+
 WORKING_HOURS_PATTERNS = [
-    r"(working hours|site hours|hours of work)\s*[:\-]?\s*([^\n]{0,220})",
-    r"(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?).{0,80}(\d{1,2}[:.]\d{2}).{0,40}(\d{1,2}[:.]\d{2})",
+    r"\b(?:working hours|site hours|hours of work)\b[:\s\-]*([^\n]{0,160})",
+    r"\b(?:mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday)\b.{0,80}\b\d{1,2}[:.]\d{2}\b.{0,40}\b\d{1,2}[:.]\d{2}\b",
 ]
+
+LD_PATTERNS = [
+    r"\b(?:liquidated damages|LDs?|LADs?)\b[:\s\-]*([^\n]{0,120})",
+    r"\b(?:liquidated damages|LDs?|LADs?)\b.{0,80}\£\s?\d[\d,]*\.?\d*",
+]
+
+RETENTION_PATTERNS = [
+    r"\bretention\b[:\s\-]*([^\n]{0,120})",
+    r"\b\d{1,2}(?:\.\d+)?\s*%\b.{0,40}\bretention\b",
+]
+
 INSURANCE_PATTERNS = [
-    r"\b(public liability|employers liability|EL|PL)\b.{0,140}(£\s?\d[\d,]*\.?\d*)",
-    r"\b(insurance)\b.{0,180}(£\s?\d[\d,]*\.?\d*)",
+    r"\b(?:public liability|employers liability|EL|PL|insurance)\b[:\s\-]*([^\n]{0,140})",
+    r"\b(?:public liability|employers liability|insurance)\b.{0,120}\£\s?\d[\d,]*\.?\d*",
 ]
+
 ACCREDITATION_PATTERNS = [
-    r"\b(CHAS|SMAS|SafeContractor|Constructionline|ISO\s?9001|ISO\s?14001|ISO\s?45001)\b.{0,180}",
+    r"\b(?:CHAS|SMAS|SafeContractor|Constructionline|ISO\s?9001|ISO\s?14001|ISO\s?45001)\b.{0,140}",
 ]
 
 REQ_STRICT_RE = re.compile(r"\b(must|shall|required|mandatory|as a minimum|minimum of|no later than)\b", re.I)
@@ -152,12 +176,6 @@ REQUIREMENT_FLOOD_HINTS = [
     "confidential", "not be disclosed", "treated as confidential",
     "acceptance shall not", "cdp", "supplementary drawings",
 ]
-IGNORED_FILENAMES = {
-    ".ds_store", "thumbs.db", "desktop.ini"
-}
-IGNORED_SUFFIXES = {
-    ".tmp", ".bak", ".lock"
-}
 BAD_FRAGMENT_RE = re.compile(
     r"(\b\d+(\.\d+){1,}\b|"
     r"\b(employer'?s agent|project manager|quantity surveyor)\b|"
@@ -179,6 +197,10 @@ def _safe_json_loads(s: str) -> dict[str, Any] | None:
         return data if isinstance(data, dict) else None
     except Exception:
         return None
+
+
+def _normalize_line(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "")).strip()
 
 
 def _trim_list(items: Any, limit: int = 10, width: int = 320) -> list[str]:
@@ -211,10 +233,6 @@ def _clean_text(s: str) -> str:
     s = re.sub(r"[ \t]+", " ", s)
     s = re.sub(r"\n{3,}", "\n\n", s)
     return s.strip()
-
-
-def _normalize_line(s: str) -> str:
-    return re.sub(r"\s+", " ", (s or "")).strip()
 
 
 def _looks_irrelevant(text: str) -> bool:
@@ -356,19 +374,17 @@ def _is_supported_upload(filename: str) -> bool:
     return True
 
 
-def _deep_scan_limit(category: str, total_files: int) -> int:
-    limit = BASE_DEEP_SCAN_LIMITS.get(category, 0)
-    if total_files > 120:
-        limit = max(1, limit // 2) if limit > 0 else 0
-    if total_files > 250:
-        limit = max(1, limit // 2) if limit > 0 else 0
-    return limit
-
-
 def _valid_date_candidate(s: str) -> bool:
     s2 = (s or "").strip()
     if not s2:
         return False
+
+    match_year = re.search(r"\b(20\d{2})\b", s2)
+    if match_year:
+        y = int(match_year.group(1))
+        if y < 2024 or y > 2035:
+            return False
+
     if re.fullmatch(r"\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}", s2):
         parts = re.split(r"[\/\-]", s2)
         if len(parts) == 3:
@@ -381,10 +397,7 @@ def _valid_date_candidate(s: str) -> bool:
                 y = int(year)
                 if y < 2024 or y > 2035:
                     return False
-    if re.search(r"\b(20[0-2]\d)\b", s2):
-        y = int(re.search(r"\b(20[0-2]\d)\b", s2).group(1))
-        if y < 2024:
-            return False
+
     return True
 
 
@@ -411,7 +424,6 @@ def _clean_fact_value(text: str | None, max_len: int = 220) -> str | None:
     if _looks_irrelevant(s) or _looks_like_schedule_row(s) or _is_gibberish_line(s):
         return None
 
-    # trim obvious junk after useful fact
     s = re.split(r"\b(employer'?s agent|project manager|quantity surveyor|name:)\b", s, maxsplit=1, flags=re.I)[0].strip(" :;,-")
     s = re.split(r"\b(section|clause|appendix|schedule)\b\s+\d", s, maxsplit=1, flags=re.I)[0].strip(" :;,-")
     s = re.sub(r"\s+", " ", s).strip()
@@ -459,11 +471,8 @@ def _shorten_constraint(bucket: str, text: str) -> str | None:
     }
 
     generic = bucket_prefix.get(bucket, "")
-    s_low = s.lower()
-
     if len(s.split()) < 9 or BAD_FRAGMENT_RE.search(s):
         return generic or None
-
     return s[:260]
 
 
@@ -520,76 +529,26 @@ def _dedup_keep_best(items: list[str], limit: int, width: int = 320) -> list[str
     return [x[1] for x in scored[:limit]]
 
 
-def _build_ai_payload(briefing: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "overview": briefing.get("overview", ""),
-        "commercial_summary": briefing.get("commercial_summary", ""),
-        "programme_access_summary": briefing.get("programme_access_summary", ""),
-        "risk_summary": briefing.get("risk_summary", ""),
-        "submission_summary": briefing.get("submission_summary", ""),
-        "key_facts": briefing.get("key_facts", {}),
-        "dates_found": briefing.get("dates_found", [])[:8],
-        "constraints": briefing.get("constraints", [])[:6],
-        "requirements_strict": briefing.get("requirements_strict", [])[:8],
-        "requirements_loose": briefing.get("requirements_loose", [])[:6],
-        "pricing_watchouts": briefing.get("pricing_watchouts", [])[:6],
-        "clarifications": briefing.get("clarifications", [])[:6],
-        "missing": briefing.get("missing", [])[:6],
-    }
-
-
-def safe_extract_zip(zip_path: Path, extract_to: Path, max_files: int = 5000) -> list[Path]:
-    extracted: list[Path] = []
-    base = extract_to.resolve()
-
-    with zipfile.ZipFile(zip_path, "r") as z:
-        members = z.infolist()
-        if len(members) > max_files:
-            raise ValueError(f"Too many files in ZIP ({len(members)}). Limit is {max_files}.")
-
-        for m in members:
-            if m.is_dir():
-                continue
-
-            zname = (m.filename or "").replace("\\", "/").lstrip("/")
-            parts = [p for p in zname.split("/") if p not in ("", ".", "..")]
-            safe_name = "/".join(parts) if parts else Path(m.filename).name
-            if not _is_supported_upload(safe_name):
-                continue
-
-            out_path = (extract_to / safe_name).resolve()
-            if not str(out_path).startswith(str(base)):
-                raise ValueError("Unsafe ZIP: path traversal detected.")
-
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            with z.open(m, "r") as src, open(out_path, "wb") as dst:
-                shutil.copyfileobj(src, dst)
-
-            extracted.append(out_path)
-
-    return extracted
-
-
-def classify_file(p: Path, display: str | None = None) -> str:
+def _classify_file(p: Path, display: str | None = None) -> str:
     ext = p.suffix.lower()
     name = p.name.lower()
     full = (display or p.as_posix()).lower()
 
-    if ext in [".dwg", ".dxf"]:
+    if ext in DRAWING_EXTS:
         return "drawings"
 
-    if ext in [".jpg", ".jpeg", ".png", ".webp"]:
+    if ext in IMAGE_EXTS:
         return "photos"
 
-    if ext in [".xlsx", ".xls", ".csv"]:
+    if ext in SPREADSHEET_EXTS:
         if _has_any(full, KEYWORDS["register"]) or _has_any(name, KEYWORDS["register"]):
             return "registers"
         if _has_any(full, KEYWORDS["boq"]) or _has_any(name, KEYWORDS["boq"]):
             return "boq"
         return "spreadsheets"
 
-    if ext in [".docx", ".doc"]:
-        if _has_any(full, KEYWORDS["forms"]) or _has_any(name, KEYWORDS["forms"]):
+    if ext in DOC_EXTS:
+        if _has_any(full, KEYWORDS["forms"]) or _has_any(name, KEYWORDS["forms"]) or _has_any(full, KEYWORDS["itt"]):
             return "forms"
         if _has_any(full, KEYWORDS["prelims"]) or _has_any(name, KEYWORDS["prelims"]):
             return "prelims"
@@ -597,7 +556,7 @@ def classify_file(p: Path, display: str | None = None) -> str:
             return "specs"
         return "documents"
 
-    if ext == ".pdf":
+    if ext in PDF_EXTS:
         if _has_any(full, KEYWORDS["addenda"]) or _has_any(name, KEYWORDS["addenda"]):
             return "addenda"
         if _has_any(full, KEYWORDS["boq"]) or _has_any(name, KEYWORDS["boq"]):
@@ -608,6 +567,8 @@ def classify_file(p: Path, display: str | None = None) -> str:
             return "prelims"
         if _has_any(full, KEYWORDS["specs"]) or _has_any(name, KEYWORDS["specs"]):
             return "specs"
+        if _has_any(full, KEYWORDS["itt"]) or _has_any(name, KEYWORDS["itt"]):
+            return "forms"
         if any(h in full for h in DRAWING_HINTS) or any(h in name for h in DRAWING_HINTS):
             return "drawings"
         return "pdfs"
@@ -615,18 +576,99 @@ def classify_file(p: Path, display: str | None = None) -> str:
     return "other"
 
 
-def guess_revision(filename: str) -> str | None:
-    s = (filename or "").upper()
-    m = re.search(r"(?:REV[\s_\-]*)?([PC]\d{2,3})\b", s)
-    return m.group(1) if m else None
+def _file_priority_score(display: str, category: str) -> int:
+    s = (display or "").lower()
+    score = 0
+
+    priority_words = {
+        120: ["invitation to tender", "tender return", "instructions to tenderers", "itt"],
+        110: ["prelim", "prelims"],
+        105: ["employer requirements", "employer's requirements", "works information", "scope", "specification", "spec"],
+        100: ["pricing schedule", "bill of quantities", "boq", "schedule of rates", "rates"],
+        95: ["clarification", "addendum", "addenda", "query response", "rfi"],
+        90: ["programme", "program", "gantt"],
+        85: ["form of tender", "declaration", "submission"],
+        80: ["document register", "drawing register", "register"],
+    }
+
+    for pts, words in priority_words.items():
+        if any(w in s for w in words):
+            score += pts
+
+    if category == "prelims":
+        score += 60
+    elif category == "specs":
+        score += 58
+    elif category == "forms":
+        score += 55
+    elif category == "addenda":
+        score += 52
+    elif category == "boq":
+        score += 50
+    elif category == "registers":
+        score += 42
+    elif category == "pdfs":
+        score += 28
+    elif category == "documents":
+        score += 24
+    elif category == "spreadsheets":
+        score += 15
+    elif category == "drawings":
+        score += 8
+    else:
+        score += 0
+
+    parts = s.split("/")
+    if len(parts) > 1:
+        folder_text = " ".join(parts[:-1])
+        if any(w in folder_text for w in ["tender", "submission", "commercial", "prelim", "spec", "pricing", "clarification"]):
+            score += 15
+
+    return score
 
 
-def guess_drawing_number(filename: str) -> str | None:
-    s = Path(filename).stem.upper()
-    m = re.search(r"\b([A-Z]{1,4}[-_ ]?\d{2,6})\b", s)
-    if m:
-        return m.group(1).replace(" ", "-").replace("_", "-")
-    return None
+def _deep_scan_limit(category: str, total_files: int) -> int:
+    base = BASE_DEEP_SCAN_LIMITS.get(category, 0)
+    if total_files > 120:
+        base = max(1, base // 2) if base > 0 else 0
+    if total_files > 250:
+        base = max(1, base // 2) if base > 0 else 0
+    if total_files > 500:
+        base = max(1, base // 2) if base > 0 else 0
+    return base
+
+
+def _ocr_image_file(path: Path) -> str:
+    if not Image or not pytesseract:
+        return ""
+    try:
+        img = Image.open(path)
+        return _clean_text(pytesseract.image_to_string(img))
+    except Exception:
+        return ""
+
+
+def _ocr_pdf_file(path: Path, max_pages: int = PDF_OCR_MAX_PAGES) -> str:
+    if not convert_from_path or not pytesseract:
+        return ""
+    try:
+        images = convert_from_path(str(path), first_page=1, last_page=max_pages, dpi=200)
+        parts: list[str] = []
+        for img in images[:max_pages]:
+            txt = pytesseract.image_to_string(img)
+            if txt and txt.strip():
+                parts.append(txt)
+        return _clean_text("\n".join(parts))
+    except Exception:
+        return ""
+
+
+def _extract_date_candidates_from_text(text: str) -> list[str]:
+    dates: set[str] = set()
+    for pat in DATE_PATTERNS:
+        for m in re.finditer(pat, text or "", flags=re.IGNORECASE):
+            dates.add(m.group(1))
+    return _clean_date_candidates(sorted(dates)[:30])
 
 
 def _extract_requirements(text: str, max_lines: int = 20) -> dict[str, list[str]]:
@@ -675,61 +717,7 @@ def _extract_requirements(text: str, max_lines: int = 20) -> dict[str, list[str]
     return {"strict": dedup("strict", max_lines), "loose": dedup("loose", max_lines)}
 
 
-def _find_evidence(text: str, patterns: list[str], max_items: int = 6) -> list[dict[str, str]]:
-    found: list[dict[str, str]] = []
-    if not text:
-        return found
-
-    for pat in patterns:
-        for m in re.finditer(pat, text, flags=re.IGNORECASE):
-            ctx = _sentences_around(text, m.start(), max_sentences=2)
-            ctx = _clean_candidate_sentence(ctx, width=440)
-            if not ctx:
-                continue
-            found.append({"match": ctx})
-            if len(found) >= max_items:
-                return found
-
-    return found
-
-
-def _best_line_from_evidence(items: list[dict[str, str]] | None) -> str | None:
-    if not items:
-        return None
-    best: tuple[int, str] | None = None
-    for it in items:
-        s = _normalize_line(it.get("match") or "")
-        if not s:
-            continue
-        sc = _sentence_score(s)
-        if best is None or sc > best[0]:
-            best = (sc, s)
-    return _clean_fact_value(best[1], 240) if best else None
-
-
-def _find_bucket_evidence(merged: str, needle: str, bucket: str, max_items: int = 1) -> list[str]:
-    merged_lc = merged.lower()
-    out: list[str] = []
-    start = 0
-    while len(out) < max_items:
-        idx = merged_lc.find(needle, start)
-        if idx == -1:
-            break
-        s = _sentences_around(merged, idx, max_sentences=2)
-        s = _clean_candidate_sentence(s, width=440)
-        if s:
-            sl = s.lower()
-            if bucket == "Services / isolations":
-                if not any(x in sl for x in ["isolation", "isolations", "live", "disconnect", "disconnection", "divert", "diversion"]):
-                    start = idx + len(needle)
-                    continue
-            if _sentence_score(s) > 0 and s not in out:
-                out.append(s)
-        start = idx + len(needle)
-    return out
-
-
-def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, Any]:
+def _extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, Any]:
     info: dict[str, Any] = {
         "pages": None,
         "keyword_hits": {},
@@ -737,6 +725,7 @@ def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, An
         "snippet": "",
         "text_len": 0,
         "requirements": {"strict": [], "loose": []},
+        "ocr_used": False,
     }
 
     try:
@@ -750,6 +739,14 @@ def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, An
                 text_parts.append(t)
 
         text = _clean_text("\n".join(text_parts))
+
+        # OCR fallback for scanned PDFs
+        if len(text) < 500:
+            ocr_text = _ocr_pdf_file(path, max_pages=min(PDF_OCR_MAX_PAGES, info["pages"] or PDF_OCR_MAX_PAGES))
+            if len(ocr_text) > len(text):
+                text = ocr_text
+                info["ocr_used"] = True
+
         info["text_len"] = len(text)
 
         text_lc = text.lower()
@@ -759,14 +756,9 @@ def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, An
                 hits[kw] = text_lc.count(kw)
         info["keyword_hits"] = dict(sorted(hits.items(), key=lambda x: x[1], reverse=True)[:25])
 
-        dates: set[str] = set()
-        for pat in DATE_PATTERNS:
-            for m in re.finditer(pat, text, flags=re.IGNORECASE):
-                dates.add(m.group(1))
-        info["date_candidates"] = _clean_date_candidates(sorted(dates)[:30])
-
+        info["date_candidates"] = _extract_date_candidates_from_text(text)
         info["snippet"] = text[:1000]
-        info["text"] = text[:18000]
+        info["text"] = text[:22000]
         info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
@@ -775,8 +767,15 @@ def extract_pdf_info(path: Path, max_pages: int = PDF_MAX_PAGES) -> dict[str, An
     return info
 
 
-def extract_docx_info(path: Path, max_paras: int = DOCX_MAX_PARAS) -> dict[str, Any]:
-    info: dict[str, Any] = {"headings": [], "keyword_hits": {}, "snippet": "", "text_len": 0, "requirements": {"strict": [], "loose": []}}
+def _extract_docx_info(path: Path, max_paras: int = DOCX_MAX_PARAS) -> dict[str, Any]:
+    info: dict[str, Any] = {
+        "headings": [],
+        "keyword_hits": {},
+        "snippet": "",
+        "text_len": 0,
+        "requirements": {"strict": [], "loose": []},
+        "date_candidates": [],
+    }
 
     try:
         doc = Document(str(path))
@@ -809,14 +808,9 @@ def extract_docx_info(path: Path, max_paras: int = DOCX_MAX_PARAS) -> dict[str, 
                 hits[kw] = text_lc.count(kw)
         info["keyword_hits"] = dict(sorted(hits.items(), key=lambda x: x[1], reverse=True)[:25])
 
-        dates: set[str] = set()
-        for pat in DATE_PATTERNS:
-            for m in re.finditer(pat, text, flags=re.IGNORECASE):
-                dates.add(m.group(1))
-        info["date_candidates"] = _clean_date_candidates(sorted(dates)[:30])
-
+        info["date_candidates"] = _extract_date_candidates_from_text(text)
         info["snippet"] = text[:1000]
-        info["text"] = text[:18000]
+        info["text"] = text[:22000]
         info["requirements"] = _extract_requirements(text)
 
     except Exception as e:
@@ -825,7 +819,7 @@ def extract_docx_info(path: Path, max_paras: int = DOCX_MAX_PARAS) -> dict[str, 
     return info
 
 
-def detect_boq_columns(header_row: list[str]) -> dict[str, int]:
+def _detect_boq_columns(header_row: list[str]) -> dict[str, int]:
     cols = [c.lower().strip() for c in header_row]
 
     def find_any(keys: list[str]) -> int:
@@ -845,19 +839,18 @@ def detect_boq_columns(header_row: list[str]) -> dict[str, int]:
     return {k: v for k, v in mapping.items() if v != -1}
 
 
-def extract_xlsx_info(path: Path) -> dict[str, Any]:
+def _extract_xlsx_info(path: Path) -> dict[str, Any]:
     info: dict[str, Any] = {"sheets": []}
-
     try:
         wb = load_workbook(filename=str(path), data_only=True, read_only=True)
-        for name in wb.sheetnames[:12]:
+        for name in wb.sheetnames[:XLSX_MAX_SHEETS]:
             ws = wb[name]
             rows: list[list[str]] = []
-            for r in ws.iter_rows(min_row=1, max_row=24, values_only=True):
+            for r in ws.iter_rows(min_row=1, max_row=XLSX_MAX_ROWS, values_only=True):
                 rows.append([("" if v is None else str(v)).strip() for v in r][:20])
 
             header = rows[0] if rows else []
-            colmap = detect_boq_columns(header) if header else {}
+            colmap = _detect_boq_columns(header) if header else {}
 
             info["sheets"].append({
                 "name": name,
@@ -865,14 +858,12 @@ def extract_xlsx_info(path: Path) -> dict[str, Any]:
                 "boq_column_map": colmap,
                 "preview_rows": rows[:6],
             })
-
     except Exception as e:
         info["error"] = f"XLSX read failed: {e}"
-
     return info
 
 
-def extract_csv_info(path: Path) -> dict[str, Any]:
+def _extract_csv_info(path: Path) -> dict[str, Any]:
     info: dict[str, Any] = {"header_guess": [], "boq_column_map": {}, "preview_rows": []}
     try:
         with open(path, "r", encoding="utf-8", errors="ignore", newline="") as f:
@@ -880,29 +871,49 @@ def extract_csv_info(path: Path) -> dict[str, Any]:
             rows: list[list[str]] = []
             for i, r in enumerate(reader):
                 rows.append([c.strip() for c in r][:20])
-                if i >= 20:
+                if i >= CSV_MAX_ROWS:
                     break
 
         header = rows[0] if rows else []
         info["header_guess"] = header[:16]
-        info["boq_column_map"] = detect_boq_columns(header) if header else {}
+        info["boq_column_map"] = _detect_boq_columns(header) if header else {}
         info["preview_rows"] = rows[:6]
-
     except Exception as e:
         info["error"] = f"CSV read failed: {e}"
     return info
 
 
-def extract_by_type(path: Path, category: str) -> dict[str, Any]:
+def _extract_image_info(path: Path) -> dict[str, Any]:
+    info: dict[str, Any] = {
+        "text_len": 0,
+        "snippet": "",
+        "requirements": {"strict": [], "loose": []},
+        "date_candidates": [],
+        "ocr_used": False,
+    }
+    txt = _ocr_image_file(path)
+    if txt:
+        info["ocr_used"] = True
+        info["text_len"] = len(txt)
+        info["snippet"] = txt[:1000]
+        info["text"] = txt[:12000]
+        info["date_candidates"] = _extract_date_candidates_from_text(txt)
+        info["requirements"] = _extract_requirements(txt)
+    return info
+
+
+def _extract_by_type(path: Path, category: str) -> dict[str, Any]:
     ext = path.suffix.lower()
     if ext == ".pdf":
-        return extract_pdf_info(path)
+        return _extract_pdf_info(path)
     if ext == ".docx":
-        return extract_docx_info(path)
-    if ext in [".xlsx", ".xls"]:
-        return extract_xlsx_info(path)
+        return _extract_docx_info(path)
+    if ext in {".xlsx", ".xls"}:
+        return _extract_xlsx_info(path)
     if ext == ".csv":
-        return extract_csv_info(path)
+        return _extract_csv_info(path)
+    if ext in IMAGE_EXTS:
+        return _extract_image_info(path)
 
     if category == "drawings":
         return {
@@ -913,12 +924,49 @@ def extract_by_type(path: Path, category: str) -> dict[str, Any]:
     return {}
 
 
-def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+def _best_candidate_from_patterns(
+    text: str,
+    patterns: list[str],
+    *,
+    validator=None,
+    cleaner=None,
+    max_items: int = 6,
+) -> list[str]:
+    found: list[tuple[int, str]] = []
+    seen: set[str] = set()
+
+    if not text:
+        return []
+
+    for pat in patterns:
+        for m in re.finditer(pat, text, flags=re.IGNORECASE):
+            ctx = _sentences_around(text, m.start(), max_sentences=2)
+            if not ctx:
+                continue
+            if cleaner:
+                ctx = cleaner(ctx)
+            else:
+                ctx = _clean_fact_value(ctx, 320)
+            if not ctx:
+                continue
+            if validator and not validator(ctx):
+                continue
+            key = ctx.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append((_sentence_score(ctx), ctx))
+
+    found.sort(key=lambda x: x[0], reverse=True)
+    return [x[1] for x in found[:max_items]]
+
+
+def _build_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     text_blobs: list[str] = []
     strict_reqs: list[str] = []
     loose_reqs: list[str] = []
 
-    for cat in ["forms", "prelims", "addenda", "specs", "documents", "pdfs"]:
+    for cat in ["forms", "prelims", "addenda", "specs", "documents", "pdfs", "photos"]:
         for item in sections.get(cat, []):
             ex = item.get("extracted") or {}
             t = ex.get("text")
@@ -931,12 +979,12 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
             strict_reqs.extend(req.get("strict", []) or [])
             loose_reqs.extend(req.get("loose", []) or [])
 
-    merged = "\n\n".join(text_blobs)[:120000]
+    merged = "\n\n".join(text_blobs)[:140000]
     merged_lc = merged.lower()
 
     tender_return_candidates = _best_candidate_from_patterns(
         merged,
-        TENDER_RETURN_PATTERNS,
+        DEADLINE_PATTERNS,
         cleaner=lambda s: _clean_fact_value(s, 180),
         validator=_valid_date_candidate,
         max_items=4,
@@ -1094,7 +1142,7 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
 
     acc_short = _trim_list(accreditations_raw, 6, 180)
 
-    briefing = {
+    return {
         "title": "Tender Pack Summary",
         "executive_summary": "EXECUTIVE SUMMARY\n" + "\n".join([f"• {x}" for x in executive_lines]),
         "overview": " ".join(overview_parts),
@@ -1131,10 +1179,27 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
             "accreditations_candidates": acc_short[:3],
         },
     }
-    return briefing
 
 
-def ai_enhance_briefing(briefing: dict[str, Any]) -> dict[str, Any]:
+def _build_ai_payload(briefing: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "overview": briefing.get("overview", ""),
+        "commercial_summary": briefing.get("commercial_summary", ""),
+        "programme_access_summary": briefing.get("programme_access_summary", ""),
+        "risk_summary": briefing.get("risk_summary", ""),
+        "submission_summary": briefing.get("submission_summary", ""),
+        "key_facts": briefing.get("key_facts", {}),
+        "dates_found": briefing.get("dates_found", [])[:8],
+        "constraints": briefing.get("constraints", [])[:6],
+        "requirements_strict": briefing.get("requirements_strict", [])[:8],
+        "requirements_loose": briefing.get("requirements_loose", [])[:6],
+        "pricing_watchouts": briefing.get("pricing_watchouts", [])[:6],
+        "clarifications": briefing.get("clarifications", [])[:6],
+        "missing": briefing.get("missing", [])[:6],
+    }
+
+
+def _ai_enhance_briefing(briefing: dict[str, Any]) -> dict[str, Any]:
     if not openai_client:
         briefing["ai_used"] = False
         briefing["ai_error"] = "OPENAI_API_KEY not set"
@@ -1243,7 +1308,7 @@ Return STRICT JSON with this exact structure:
         return briefing
 
 
-def build_pdf_report(report: dict[str, Any]) -> bytes:
+def _build_pdf_report(report: dict[str, Any]) -> bytes:
     briefing = report.get("briefing") or {}
     summary = report.get("summary") or {}
     key_facts = briefing.get("key_facts") or {}
@@ -1268,12 +1333,7 @@ def build_pdf_report(report: dict[str, Any]) -> bytes:
     story: list[Any] = []
 
     def esc(s: Any) -> str:
-        return (
-            str(s or "")
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-        )
+        return str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     def add_paragraph(text: str, style: str = "BodySmall") -> None:
         if text:
@@ -1366,6 +1426,54 @@ def _strip_internal_fields(sections: dict[str, list[dict[str, Any]]]) -> None:
                             sh.pop("preview_rows", None)
 
 
+def _recursive_extract_zip(
+    zip_path: Path,
+    extract_to: Path,
+    max_files: int = MAX_ZIP_MEMBERS,
+    depth: int = 0,
+) -> list[Path]:
+    if depth > MAX_ZIP_RECURSION:
+        return []
+
+    extracted: list[Path] = []
+    base = extract_to.resolve()
+
+    with zipfile.ZipFile(zip_path, "r") as z:
+        members = z.infolist()
+        if len(members) > max_files:
+            raise ValueError(f"Too many files in ZIP ({len(members)}). Limit is {max_files}.")
+
+        for m in members:
+            if m.is_dir():
+                continue
+
+            zname = (m.filename or "").replace("\\", "/").lstrip("/")
+            parts = [p for p in zname.split("/") if p not in ("", ".", "..")]
+            safe_name = "/".join(parts) if parts else Path(m.filename).name
+            if not _is_supported_upload(safe_name) and not safe_name.lower().endswith(".zip"):
+                continue
+
+            out_path = (extract_to / safe_name).resolve()
+            if not str(out_path).startswith(str(base)):
+                raise ValueError("Unsafe ZIP: path traversal detected.")
+
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with z.open(m, "r") as src, open(out_path, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+            if out_path.suffix.lower() == ".zip":
+                nested_dir = out_path.parent / f"{out_path.stem}_unzipped"
+                nested_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    extracted.extend(_recursive_extract_zip(out_path, nested_dir, max_files=max_files, depth=depth + 1))
+                except Exception:
+                    pass
+            else:
+                extracted.append(out_path)
+
+    return extracted
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
@@ -1388,7 +1496,7 @@ async def _save_upload_to_path(uf: UploadFile, dest: Path, max_bytes: int) -> in
 
 @app.post("/api/report/pdf")
 async def report_pdf(payload: dict[str, Any] = Body(...)):
-    pdf_bytes = build_pdf_report(payload)
+    pdf_bytes = _build_pdf_report(payload)
     filename = "tender-summary.pdf"
     return Response(
         content=pdf_bytes,
@@ -1420,8 +1528,8 @@ async def analyse(
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            extract_dir = tmp_path / "unzipped"
-            extract_dir.mkdir(parents=True, exist_ok=True)
+            extract_root = tmp_path / "extracted"
+            extract_root.mkdir(parents=True, exist_ok=True)
 
             uploaded_names: list[str] = []
             scanned_paths: list[tuple[Path, str]] = []
@@ -1440,12 +1548,12 @@ async def analyse(
                         return JSONResponse({"error": f"File too large (limit 300MB): {uf.filename}"}, status_code=400)
 
                     try:
-                        extracted = safe_extract_zip(zp, extract_dir, max_files=15000)
+                        extracted = _recursive_extract_zip(zp, extract_root, max_files=MAX_ZIP_MEMBERS, depth=0)
                     except Exception as e:
                         return JSONResponse({"error": f"Could not extract ZIP {uf.filename}: {e}"}, status_code=400)
 
                     for p in extracted:
-                        scanned_paths.append((p, str(p.relative_to(extract_dir)).replace("\\", "/")))
+                        scanned_paths.append((p, str(p.relative_to(extract_root)).replace("\\", "/")))
                 else:
                     rel = (uf.filename or "").replace("\\", "/").lstrip("/")
                     rel_path = Path(rel)
@@ -1471,20 +1579,28 @@ async def analyse(
             total_files = 0
             by_category_count: dict[str, int] = defaultdict(int)
             deep_scan_count: dict[str, int] = defaultdict(int)
-            extraction_jobs: list[tuple[dict[str, Any], Path, str]] = []
 
+            classified_rows: list[tuple[int, Path, str, str, str]] = []
             for p, display in scanned_paths[:MAX_FILES_TO_PROCESS]:
                 total_files += 1
                 ext = p.suffix.lower() if p.suffix else "(no_ext)"
                 ext_counter[ext] += 1
 
-                category = classify_file(p, display=display)
+                category = _classify_file(p, display=display)
                 by_category_count[category] += 1
+                priority = _file_priority_score(display, category)
+                classified_rows.append((priority, p, display, ext, category))
 
+            # Sort best files first before deep extraction
+            classified_rows.sort(key=lambda x: x[0], reverse=True)
+
+            extraction_jobs: list[tuple[dict[str, Any], Path, str]] = []
+            for priority, p, display, ext, category in classified_rows:
                 item = {
                     "file": display,
                     "ext": ext,
                     "category": category,
+                    "priority": priority,
                     "extracted": {},
                 }
                 sections[category].append(item)
@@ -1496,7 +1612,7 @@ async def analyse(
 
             def _run_extract(job: tuple[dict[str, Any], Path, str]) -> tuple[dict[str, Any], dict[str, Any]]:
                 item, p, category = job
-                return item, extract_by_type(p, category)
+                return item, _extract_by_type(p, category)
 
             if extraction_jobs:
                 with ThreadPoolExecutor(max_workers=EXTRACT_WORKERS) as executor:
@@ -1511,8 +1627,8 @@ async def analyse(
             def has_cat(cat: str) -> bool:
                 return len(sections.get(cat, [])) > 0
 
-            raw_briefing = extract_pack_briefing(sections)
-            briefing = ai_enhance_briefing(raw_briefing)
+            raw_briefing = _build_briefing(sections)
+            briefing = _ai_enhance_briefing(raw_briefing)
 
             _strip_internal_fields(sections)
 
@@ -1532,6 +1648,7 @@ async def analyse(
                     "prelims_found": has_cat("prelims"),
                     "specs_found": has_cat("specs"),
                     "addenda_found": has_cat("addenda"),
+                    "ocr_available": bool(convert_from_path and pytesseract),
                     "ai_enabled": bool(openai_client),
                     "ai_model": OPENAI_MODEL if openai_client else None,
                     "ai_used": bool(briefing.get("ai_used")),
