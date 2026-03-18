@@ -949,6 +949,8 @@ def extract_pack_briefing(sections: dict[str, list[dict[str, Any]]]) -> dict[str
 
 def ai_enhance_briefing(briefing: dict[str, Any]) -> dict[str, Any]:
     if not openai_client:
+        briefing["ai_used"] = False
+        briefing["ai_error"] = "OPENAI_API_KEY not set"
         return briefing
 
     payload = _build_ai_payload(briefing)
@@ -1014,6 +1016,8 @@ Return STRICT JSON with this exact structure:
         content = resp.choices[0].message.content or ""
         parsed = _safe_json_loads(content)
         if not parsed:
+            briefing["ai_used"] = False
+            briefing["ai_error"] = "OpenAI returned non-JSON content"
             return briefing
 
         enhanced = {
@@ -1044,10 +1048,13 @@ Return STRICT JSON with this exact structure:
             "sources_scanned": briefing.get("sources_scanned", 0),
             "evidence": briefing.get("evidence", {}),
             "ai_used": True,
+            "ai_error": None,
         }
         return enhanced
 
-    except Exception:
+    except Exception as e:
+        briefing["ai_used"] = False
+        briefing["ai_error"] = str(e)
         return briefing
 
 
